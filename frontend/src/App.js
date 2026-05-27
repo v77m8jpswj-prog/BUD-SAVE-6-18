@@ -12,6 +12,10 @@ import {
   ArrowUpRight,
   Settings,
   Radio,
+  Link2,
+  Link2Off,
+  ExternalLink,
+  Paperclip,
 } from "lucide-react";
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
@@ -96,6 +100,11 @@ function App() {
   const [composeRound, setComposeRound] = useState(1);
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState(null);
+  const [outlook, setOutlook] = useState(null);
+  const [outlookMail, setOutlookMail] = useState([]);
+  const [outlookLoading, setOutlookLoading] = useState(false);
+  const [replyFor, setReplyFor] = useState(null);
+  const [replyBody, setReplyBody] = useState("");
 
   const showToast = (msg, kind = "ok") => {
     setToast({ msg, kind });
@@ -104,20 +113,54 @@ function App() {
 
   const refresh = useCallback(async () => {
     try {
-      const [h, c, l] = await Promise.all([
+      const [h, c, l, o] = await Promise.all([
         axios.get(`${API}/health`),
         axios.get(`${API}/agent-mail/config`),
         axios.get(`${API}/agent-mail/letters?limit=100`),
+        axios.get(`${API}/outlook/status`),
       ]);
       setHealth(h.data);
       setConfig(c.data);
       setLetters(l.data.letters || []);
+      setOutlook(o.data);
       if (!baseUrlInput && c.data.bud_base_url) setBaseUrlInput(c.data.bud_base_url);
     } catch (e) {
       console.error("refresh failed", e);
       showToast("backend unreachable", "err");
     }
   }, [baseUrlInput]);
+
+  const loadInbox = useCallback(async () => {
+    if (!outlook?.connected) return;
+    setOutlookLoading(true);
+    try {
+      const r = await axios.get(`${API}/outlook/inbox?limit=15`);
+      setOutlookMail(r.data.messages || []);
+    } catch (e) {
+      showToast(e.response?.data?.detail || "inbox fetch failed", "err");
+    } finally {
+      setOutlookLoading(false);
+    }
+  }, [outlook?.connected]);
+
+  useEffect(() => {
+    if (outlook?.connected) loadInbox();
+    else setOutlookMail([]);
+  }, [outlook?.connected, loadInbox]);
+
+  // Handle ?outlook=connected|error redirect from OAuth callback
+  useEffect(() => {
+    const sp = new URLSearchParams(window.location.search);
+    const ol = sp.get("outlook");
+    if (ol === "connected") {
+      showToast("outlook connected");
+      window.history.replaceState({}, "", window.location.pathname);
+      refresh();
+    } else if (ol === "error") {
+      showToast(`outlook: ${sp.get("msg") || "error"}`, "err");
+      window.history.replaceState({}, "", window.location.pathname);
+    }
+  }, []); // eslint-disable-line
 
   useEffect(() => {
     // Auto-fill base URL from frontend env if config doesn't have one yet
@@ -153,6 +196,68 @@ function App() {
       await refresh();
     } catch (e) {
       showToast(e.response?.data?.detail || "handshake failed", "err");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const connectOutlook = () => {
+    window.location.href = `${API}/outlook/oauth/start`;
+  };
+
+  const disconnectOutlook = async () => {
+    setBusy(true);
+    try {
+      await axios.post(`${API}/outlook/disconnect`);
+      showToast("outlook disconnected");
+      await refresh();
+    } catch (e) {
+      showToast("disconnect failed", "err");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const submitReply = async () => {
+    if (!replyFor || !replyBody.trim()) {
+      showToast("body required", "err");
+      return;
+    }
+    setBusy(true);
+    try {
+      const dr = await axios.post(`${API}/outlook/draft`, {
+        message_id: replyFor.id,
+        body: replyBody,
+      });
+      const draftId = dr.data.draft_id;
+      await axios.post(`${API}/outlook/send/${encodeURIComponent(draftId)}`);
+      showToast("reply sent");
+      setReplyFor(null);
+      setReplyBody("");
+      await loadInbox();
+    } catch (e) {
+      showToast(e.response?.data?.detail || "reply failed", "err");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const saveDraftOnly = async () => {
+    if (!replyFor || !replyBody.trim()) {
+      showToast("body required", "err");
+      return;
+    }
+    setBusy(true);
+    try {
+      await axios.post(`${API}/outlook/draft`, {
+        message_id: replyFor.id,
+        body: replyBody,
+      });
+      showToast("draft saved in Outlook");
+      setReplyFor(null);
+      setReplyBody("");
+    } catch (e) {
+      showToast(e.response?.data?.detail || "draft failed", "err");
     } finally {
       setBusy(false);
     }
@@ -353,6 +458,118 @@ function App() {
           </Section>
 
           <Section
+            title="Outlook"
+            kicker={`MICROSOFT GRAPH · ${outlook?.connected ? outlook.email : "not connected"}`}
+            right={
+              outlook?.connected ? (
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={loadInbox}
+                    disabled={outlookLoading}
+                    className="bud-btn-ghost px-3 py-2 rounded text-sm inline-flex items-center gap-2"
+                    data-testid="outlook-refresh-btn"
+                  >
+                    <RefreshCw size={14} className={outlookLoading ? "animate-spin" : ""} />
+                    refresh
+                  </button>
+                  <button
+                    onClick={disconnectOutlook}
+                    disabled={busy}
+                    className="bud-btn-ghost px-3 py-2 rounded text-sm inline-flex items-center gap-2"
+                    data-testid="outlook-disconnect-btn"
+                  >
+                    <Link2Off size={14} /> disconnect
+                  </button>
+                </div>
+              ) : (
+                <button
+                  onClick={connectOutlook}
+                  className="bud-btn-primary px-4 py-2 rounded text-sm inline-flex items-center gap-2"
+                  data-testid="outlook-connect-btn"
+                >
+                  <Link2 size={14} /> Connect Outlook
+                </button>
+              )
+            }
+          >
+            {!outlook?.connected ? (
+              <div className="bud-card-inset p-4 text-xs text-[var(--bud-muted)] leading-relaxed">
+                <div className="text-[var(--bud-text)] mb-2 font-semibold">
+                  Microsoft Graph not connected.
+                </div>
+                Hit <strong className="text-[var(--bud-amber)]">Connect Outlook</strong> →
+                sign in as <code>doc@drunderhood.com</code> → consent to the 5 scopes
+                (<code>Mail.Read</code>, <code>Mail.Send</code>, <code>Mail.ReadWrite</code>,
+                <code>User.Read</code>, <code>offline_access</code>). You'll land back here.
+              </div>
+            ) : outlookLoading && outlookMail.length === 0 ? (
+              <div className="text-xs text-[var(--bud-muted)] py-6 text-center">loading inbox…</div>
+            ) : outlookMail.length === 0 ? (
+              <div className="text-xs text-[var(--bud-muted)] py-6 text-center">
+                inbox empty — or no messages in the last batch.
+              </div>
+            ) : (
+              <div className="space-y-2 max-h-[480px] overflow-auto pr-1">
+                {outlookMail.map((m) => (
+                  <div
+                    key={m.id}
+                    className="bud-card-inset p-3 hover:border-[var(--bud-amber)] transition-colors"
+                    style={{ borderColor: m.is_read ? undefined : "rgba(245,158,11,0.35)" }}
+                    data-testid={`outlook-msg-${m.id}`}
+                  >
+                    <div className="flex items-start justify-between gap-3 mb-1">
+                      <div className="flex items-center gap-2 min-w-0">
+                        {!m.is_read && (
+                          <span
+                            className="w-1.5 h-1.5 rounded-full"
+                            style={{ background: "var(--bud-amber)" }}
+                          />
+                        )}
+                        <span className="text-xs text-[var(--bud-text)] font-semibold truncate">
+                          {m.from_name || m.from_email || "—"}
+                        </span>
+                        {m.has_attachments && <Paperclip size={11} className="text-[var(--bud-muted)]" />}
+                      </div>
+                      <span className="text-[10px] text-[var(--bud-muted)] whitespace-nowrap">
+                        {m.received_at ? new Date(m.received_at).toLocaleString() : ""}
+                      </span>
+                    </div>
+                    <div className="text-xs text-[var(--bud-text)] mb-1 truncate">
+                      {m.subject}
+                    </div>
+                    <div className="text-[11px] text-[var(--bud-muted)] line-clamp-2 leading-relaxed">
+                      {m.preview}
+                    </div>
+                    <div className="flex items-center gap-3 mt-2">
+                      <button
+                        onClick={() => {
+                          setReplyFor(m);
+                          setReplyBody("");
+                        }}
+                        className="text-[10px] tracking-wider uppercase text-[var(--bud-amber)] hover:text-[#fbbf24]"
+                        data-testid={`outlook-reply-${m.id}`}
+                      >
+                        draft reply
+                      </button>
+                      {m.web_link && (
+                        <a
+                          href={m.web_link}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-[10px] tracking-wider uppercase text-[var(--bud-muted)] hover:text-[var(--bud-text)] inline-flex items-center gap-1"
+                        >
+                          open in outlook <ExternalLink size={10} />
+                        </a>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </Section>
+
+
+          <Section
             title="Mailroom"
             kicker={`LETTERS · ${letters.length}`}
             right={
@@ -537,6 +754,68 @@ function App() {
       <footer className="max-w-6xl mx-auto px-6 py-8 text-[10px] tracking-[0.3em] text-[var(--bud-muted)] uppercase">
         <Hammer size={12} className="inline mr-2" /> Bud · third node · for Doc only · no upsell · no fluff
       </footer>
+
+      {replyFor && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4"
+          style={{ background: "rgba(0,0,0,0.7)" }}
+          onClick={(e) => e.target === e.currentTarget && setReplyFor(null)}
+          data-testid="reply-modal"
+        >
+          <div className="bud-card max-w-2xl w-full p-6 fade-in">
+            <div className="flex items-start justify-between mb-3">
+              <div className="min-w-0">
+                <div className="text-[10px] tracking-[0.3em] text-[var(--bud-muted)] mb-1">
+                  DRAFT REPLY TO
+                </div>
+                <div className="text-sm text-[var(--bud-text)] font-semibold truncate">
+                  {replyFor.from_name || replyFor.from_email}
+                </div>
+                <div className="text-xs text-[var(--bud-muted)] truncate">
+                  Re: {replyFor.subject}
+                </div>
+              </div>
+              <button
+                onClick={() => setReplyFor(null)}
+                className="bud-btn-ghost px-2 py-1 rounded text-xs"
+                data-testid="reply-close-btn"
+              >
+                close
+              </button>
+            </div>
+            <div className="bud-card-inset p-3 mb-3 text-[11px] text-[var(--bud-muted)] max-h-32 overflow-auto leading-relaxed">
+              {replyFor.preview}
+            </div>
+            <textarea
+              value={replyBody}
+              onChange={(e) => setReplyBody(e.target.value)}
+              rows={10}
+              placeholder="surgical reply. plain text. Doc's voice — no fluff, no upsell."
+              className="bud-input w-full px-3 py-2 rounded text-sm leading-relaxed mb-3"
+              data-testid="reply-body-input"
+              autoFocus
+            />
+            <div className="flex items-center justify-end gap-2">
+              <button
+                onClick={saveDraftOnly}
+                disabled={busy}
+                className="bud-btn-ghost px-3 py-2 rounded text-sm"
+                data-testid="reply-save-draft-btn"
+              >
+                save draft
+              </button>
+              <button
+                onClick={submitReply}
+                disabled={busy}
+                className="bud-btn-primary px-4 py-2 rounded text-sm inline-flex items-center gap-2"
+                data-testid="reply-send-btn"
+              >
+                <Send size={14} /> send
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {toast && (
         <div
