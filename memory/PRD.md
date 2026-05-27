@@ -23,13 +23,28 @@ Robert "Doc" Holmes — auto shop owner, solo founder, voice-to-text on iPhone, 
 - [x] Dashboard: status, token, recent letters, send handshake button, compose
 - [x] Memory files seeded (`doc_profile.md`, `doc_communication_notes.md`, `network_map.md`, `rules.md`)
 - [x] Handshake letter fired to OG → **delivered** (OG returned id `baa1a4ab-f2e3-4601-ada6-5c9913321bce`)
-- [ ] One surgical Day 1 ask to Doc: Microsoft Graph / Azure app registration (PENDING — see chat)
+
+## Day 2 deliverable (LANDED)
+- [x] Outlook (Microsoft Graph) OAuth + inbox + draft + send wired
+- [x] One-shot create-and-send endpoint `/api/outlook/send-new`
+- [x] Dashboard compose panel with inline asset picker (BUD WROTE THESE FOR YOU)
+- [x] Quick Assets surface — push-to-Doc one-tap copy + USE IN COMPOSE
+- [x] Daily 7 AM CT briefing — GPT-5.2 via emergentintegrations, APScheduler cron, auto-emailed to doc@drunderhood.com
+- [x] AutoLEAP API access request sent to support@autoleap.com (waiting on reply)
+- [x] Emergent platform complaint sent to support@emergent.sh re: upsell injection
 
 ## Live state
 - **Bud base URL:** https://bud-control.preview.emergentagent.com
+- **Outlook:** connected as doc@drunderhood.com
+- **Briefing cron:** 7:00 AM America/Chicago, model openai:gpt-5.2
 - **Bud inbound token (give to OG):** in DB → `/api/agent-mail/config`
 - **OG outbound token:** loaded from `.env` (bootstrap value)
 - **9 outbound token:** waiting on OG shuttle
+- **AutoLEAP API:** waiting on partnership reply
+
+## Hard rules log (`/app/memory/rules.md`)
+12 rules locked. Most recent: #11 (one-click copy or it doesn't count), #12 (default action = send, not park).
+Rule #1 expanded with zero-tolerance upsell language list after platform injection issues. See `/app/memory/strikes.md`.
 
 ## Day 2+ backlog (deferred — DO NOT START until Day 1 lands)
 - P1: Outlook (Microsoft Graph) OAuth + inbox + draft + send + 24h summary

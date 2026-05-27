@@ -17,6 +17,11 @@ from starlette.middleware.cors import CORSMiddleware
 from agent_mail import router as agent_mail_router
 from outlook import router as outlook_router
 from bud_assets import router as bud_assets_router
+from briefing import router as briefing_router, scheduled_briefing_job
+
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
+from pytz import timezone as tz_timezone
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
@@ -86,6 +91,7 @@ app.include_router(api_router)
 app.include_router(agent_mail_router)
 app.include_router(outlook_router)
 app.include_router(bud_assets_router)
+app.include_router(briefing_router)
 
 app.add_middleware(
     CORSMiddleware,
@@ -104,4 +110,27 @@ logger = logging.getLogger(__name__)
 
 @app.on_event("shutdown")
 async def shutdown_db_client():
+    sched = getattr(app.state, "scheduler", None)
+    if sched and sched.running:
+        sched.shutdown(wait=False)
     client.close()
+
+
+@app.on_event("startup")
+async def startup_scheduler():
+    """Schedule the daily foreman briefing at the configured hour (CT)."""
+    tz_name = os.environ.get("BRIEFING_TIMEZONE", "America/Chicago")
+    hour = int(os.environ.get("BRIEFING_HOUR", "7"))
+    minute = int(os.environ.get("BRIEFING_MINUTE", "0"))
+    scheduler = AsyncIOScheduler(timezone=tz_timezone(tz_name))
+    scheduler.add_job(
+        scheduled_briefing_job,
+        CronTrigger(hour=hour, minute=minute, timezone=tz_timezone(tz_name)),
+        kwargs={"db": db},
+        id="daily_briefing",
+        replace_existing=True,
+        misfire_grace_time=600,
+    )
+    scheduler.start()
+    app.state.scheduler = scheduler
+    logger.info("daily briefing scheduled @ %02d:%02d %s", hour, minute, tz_name)

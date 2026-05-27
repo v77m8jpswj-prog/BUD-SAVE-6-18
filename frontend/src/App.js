@@ -19,6 +19,9 @@ import {
   Clipboard,
   Archive,
   Package,
+  Sunrise,
+  Play,
+  Clock,
 } from "lucide-react";
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
@@ -110,6 +113,9 @@ function App() {
   const [replyBody, setReplyBody] = useState("");
   const [assets, setAssets] = useState([]);
   const [copiedAssetId, setCopiedAssetId] = useState(null);
+  const [briefing, setBriefing] = useState(null);
+  const [briefingStatus, setBriefingStatus] = useState(null);
+  const [briefingBusy, setBriefingBusy] = useState(false);
   const [sendOpen, setSendOpen] = useState(false);
   const [sendTo, setSendTo] = useState("");
   const [sendCc, setSendCc] = useState("");
@@ -123,18 +129,22 @@ function App() {
 
   const refresh = useCallback(async () => {
     try {
-      const [h, c, l, o, a] = await Promise.all([
+      const [h, c, l, o, a, bL, bS] = await Promise.all([
         axios.get(`${API}/health`),
         axios.get(`${API}/agent-mail/config`),
         axios.get(`${API}/agent-mail/letters?limit=100`),
         axios.get(`${API}/outlook/status`),
         axios.get(`${API}/bud/assets?limit=50`),
+        axios.get(`${API}/briefing/latest`),
+        axios.get(`${API}/briefing/status`),
       ]);
       setHealth(h.data);
       setConfig(c.data);
       setLetters(l.data.letters || []);
       setOutlook(o.data);
       setAssets(a.data.assets || []);
+      setBriefing(bL.data.empty ? null : bL.data);
+      setBriefingStatus(bS.data);
       if (!baseUrlInput && c.data.bud_base_url) setBaseUrlInput(c.data.bud_base_url);
     } catch (e) {
       console.error("refresh failed", e);
@@ -361,6 +371,24 @@ function App() {
     }
   };
 
+  const runBriefing = async ({ email = true } = {}) => {
+    setBriefingBusy(true);
+    try {
+      const endpoint = email ? "/briefing/run" : "/briefing/preview";
+      const r = await axios.post(`${API}${endpoint}`, email ? { email: true } : {});
+      showToast(
+        email && r.data.delivery?.sent
+          ? `briefing sent to ${r.data.delivery.recipient}`
+          : "briefing generated"
+      );
+      await refresh();
+    } catch (e) {
+      showToast(e.response?.data?.detail || "briefing failed", "err");
+    } finally {
+      setBriefingBusy(false);
+    }
+  };
+
   const sendOutlookEmail = async ({ asDraft = false } = {}) => {
     const toList = sendTo.split(/[,;\s]+/).map((s) => s.trim()).filter(Boolean);
     const ccList = sendCc.split(/[,;\s]+/).map((s) => s.trim()).filter(Boolean);
@@ -490,6 +518,85 @@ function App() {
       <main className="max-w-6xl mx-auto px-6 py-8 grid grid-cols-1 lg:grid-cols-3 gap-6 stagger">
         {/* LEFT — Identity / inbox creds */}
         <div className="lg:col-span-2 space-y-6">
+          <Section
+            title="Daily Briefing"
+            kicker={
+              briefingStatus
+                ? `GPT-5.2 · NEXT FIRE ${briefingStatus.next_run ? new Date(briefingStatus.next_run).toLocaleString() : "—"}`
+                : "GPT-5.2 · LOADING"
+            }
+            right={
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => runBriefing({ email: false })}
+                  disabled={briefingBusy}
+                  className="bud-btn-ghost px-3 py-2 rounded text-sm inline-flex items-center gap-2"
+                  data-testid="briefing-preview-btn"
+                  title="Generate without emailing"
+                >
+                  <RefreshCw size={14} className={briefingBusy ? "animate-spin" : ""} />
+                  preview
+                </button>
+                <button
+                  onClick={() => runBriefing({ email: true })}
+                  disabled={briefingBusy || !outlook?.connected}
+                  className="bud-btn-primary px-3 py-2 rounded text-sm inline-flex items-center gap-2"
+                  data-testid="briefing-run-btn"
+                  title="Generate AND email to Doc"
+                >
+                  <Play size={14} /> run + send
+                </button>
+              </div>
+            }
+          >
+            {!briefing ? (
+              <div className="bud-card-inset p-6 text-xs text-[var(--bud-muted)] text-center" data-testid="briefing-empty">
+                <Sunrise size={22} className="mx-auto mb-2 text-[var(--bud-amber)]" />
+                no briefing yet. hit <strong className="text-[var(--bud-amber)]">preview</strong> to generate one now,
+                or wait for the 7 AM CT cron.
+              </div>
+            ) : (
+              <div className="space-y-3">
+                <div className="flex items-center justify-between text-[10px] text-[var(--bud-muted)]">
+                  <span className="inline-flex items-center gap-1.5">
+                    <Clock size={11} /> generated {new Date(briefing.created_at).toLocaleString()}
+                  </span>
+                  <span>
+                    {briefing.sent ? (
+                      <span style={{ color: "var(--bud-green)" }}>· emailed to inbox</span>
+                    ) : (
+                      <span>· preview only (not emailed)</span>
+                    )}
+                  </span>
+                </div>
+                <pre
+                  className="text-xs text-[var(--bud-text)] whitespace-pre-wrap break-words leading-relaxed bud-card-inset p-4 max-h-[520px] overflow-auto"
+                  data-testid="briefing-body"
+                  style={{ fontFamily: "'JetBrains Mono', monospace" }}
+                >
+{briefing.body_md}
+                </pre>
+                <div className="flex items-center justify-end gap-2">
+                  <button
+                    onClick={async () => {
+                      try {
+                        await navigator.clipboard.writeText(briefing.body_md);
+                        showToast("briefing copied");
+                      } catch (e) {
+                        showToast("copy failed", "err");
+                      }
+                    }}
+                    className="bud-btn-ghost px-3 py-2 rounded text-sm inline-flex items-center gap-2"
+                    data-testid="briefing-copy-btn"
+                  >
+                    <Clipboard size={14} /> copy
+                  </button>
+                </div>
+              </div>
+            )}
+          </Section>
+
+
           <Section
             title="Quick Assets"
             kicker={`BUD → DOC · ${assets.length} ready`}
