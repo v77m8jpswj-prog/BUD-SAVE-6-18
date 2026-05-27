@@ -125,9 +125,10 @@ def _llm_key() -> str:
 
 
 def _llm_model() -> tuple[str, str]:
+    """Voice uses the faster mini model by default for low-latency replies."""
     return (
-        os.environ.get("LLM_MODEL_PROVIDER", "openai"),
-        os.environ.get("LLM_MODEL_NAME", "gpt-5.2"),
+        os.environ.get("LLM_VOICE_PROVIDER", os.environ.get("LLM_MODEL_PROVIDER", "openai")),
+        os.environ.get("LLM_VOICE_MODEL", "gpt-5.2-mini"),
     )
 
 

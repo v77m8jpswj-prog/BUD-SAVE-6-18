@@ -38,6 +38,10 @@ export default function VoicePanel({ showToast }) {
   const [config, setConfig] = useState(null);
   const [level, setLevel] = useState(0); // 0..1 live mic RMS for the meter
   const [hint, setHint] = useState("TAP TO TALK");
+  const [handsFree, setHandsFree] = useState(false);
+  const [speaking, setSpeaking] = useState(false);
+  const handsFreeRef = useRef(false);
+  useEffect(() => { handsFreeRef.current = handsFree; }, [handsFree]);
 
   const mediaRecorderRef = useRef(null);
   const chunksRef = useRef([]);
@@ -95,7 +99,6 @@ export default function VoicePanel({ showToast }) {
       const bin = atob(b64);
       const bytes = new Uint8Array(bin.length);
       for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-      // decodeAudioData mutates the buffer in some implementations — copy.
       const buf = await ctx.decodeAudioData(bytes.buffer.slice(0));
       if (currentSourceRef.current) {
         try { currentSourceRef.current.stop(); } catch (e) {}
@@ -103,11 +106,23 @@ export default function VoicePanel({ showToast }) {
       const src = ctx.createBufferSource();
       src.buffer = buf;
       src.connect(ctx.destination);
+      src.onended = () => {
+        setSpeaking(false);
+        currentSourceRef.current = null;
+        // Hands-free: auto-restart listening
+        if (handsFreeRef.current) {
+          setTimeout(() => {
+            if (handsFreeRef.current && !mediaRecorderRef.current) {
+              startRecording();
+            }
+          }, 250);
+        }
+      };
+      setSpeaking(true);
       src.start();
       currentSourceRef.current = src;
       return;
     } catch (e) {
-      // Fallback: classic <audio> element (will respect silent switch on iOS)
       console.warn("WebAudio playback failed, falling back to <audio>", e);
     }
     if (lastAudioUrlRef.current) URL.revokeObjectURL(lastAudioUrlRef.current);
@@ -116,9 +131,30 @@ export default function VoicePanel({ showToast }) {
     lastAudioUrlRef.current = url;
     if (audioRef.current) {
       audioRef.current.src = url;
-      audioRef.current.play().catch(() => {});
+      setSpeaking(true);
+      audioRef.current.onended = () => {
+        setSpeaking(false);
+        if (handsFreeRef.current) {
+          setTimeout(() => {
+            if (handsFreeRef.current && !mediaRecorderRef.current) startRecording();
+          }, 250);
+        }
+      };
+      audioRef.current.play().catch(() => { setSpeaking(false); });
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [muted, ensurePlaybackCtx]);
+
+  const shutUp = useCallback(() => {
+    if (currentSourceRef.current) {
+      try { currentSourceRef.current.stop(); } catch (e) {}
+      currentSourceRef.current = null;
+    }
+    if (audioRef.current) {
+      try { audioRef.current.pause(); audioRef.current.currentTime = 0; } catch (e) {}
+    }
+    setSpeaking(false);
+  }, []);
 
   const submitAudio = async (blob, mime) => {
     setProcessing(true);
@@ -342,6 +378,30 @@ export default function VoicePanel({ showToast }) {
         </div>
         <div className="flex items-center gap-2">
           <button
+            onClick={() => {
+              const next = !handsFree;
+              setHandsFree(next);
+              showToast?.(next ? "hands-free ON — Bud will keep listening" : "hands-free OFF");
+              if (next && !recording && !processing && !speaking) {
+                startRecording();
+              }
+              if (!next) {
+                if (recording) stopRecording({ cancel: true });
+              }
+            }}
+            className="px-3 py-2 rounded text-sm inline-flex items-center gap-2"
+            data-testid="voice-handsfree-btn"
+            title={handsFree ? "hands-free is on — tap to turn off" : "tap to start hands-free conversation"}
+            style={{
+              background: handsFree ? "var(--bud-amber)" : "transparent",
+              color: handsFree ? "#0a0a0b" : "var(--bud-text)",
+              border: `1px solid ${handsFree ? "var(--bud-amber)" : "var(--bud-line)"}`,
+              fontWeight: handsFree ? 600 : 400,
+            }}
+          >
+            {handsFree ? "HANDS-FREE ON" : "hands-free"}
+          </button>
+          <button
             onClick={() => setMuted((v) => !v)}
             className="bud-btn-ghost px-3 py-2 rounded text-sm inline-flex items-center gap-2"
             data-testid="voice-mute-btn"
@@ -365,6 +425,12 @@ export default function VoicePanel({ showToast }) {
         <div className="space-y-3 max-h-[420px] overflow-auto pr-1 mb-2" data-testid="voice-history">
           {[...history].reverse().map((t) => (
             <div key={t.id} className="space-y-1.5 fade-in">
+              <div className="bud-card-inset p-3" data-testid={`voice-user-${t.id}`}>
+                <div className="text-[10px] tracking-widest text-[var(--bud-muted)] mb-1">
+                  DOC {t.input_was_audio ? "· voice" : "· typed"} · {new Date(t.created_at).toLocaleTimeString()}
+                </div>
+                <div className="text-sm text-[var(--bud-text)]">{t.user_text}</div>
+              </div>
               <div
                 className="bud-card-inset p-3"
                 style={{
@@ -397,12 +463,6 @@ export default function VoicePanel({ showToast }) {
                   </button>
                 )}
               </div>
-              <div className="bud-card-inset p-3" data-testid={`voice-user-${t.id}`}>
-                <div className="text-[10px] tracking-widest text-[var(--bud-muted)] mb-1">
-                  DOC {t.input_was_audio ? "· voice" : "· typed"} · {new Date(t.created_at).toLocaleTimeString()}
-                </div>
-                <div className="text-sm text-[var(--bud-text)]">{t.user_text}</div>
-              </div>
             </div>
           ))}
         </div>
@@ -425,20 +485,24 @@ export default function VoicePanel({ showToast }) {
             />
           )}
           <button
-            onClick={handlePttClick}
+            onClick={speaking ? shutUp : handlePttClick}
             disabled={processing}
-            data-testid="voice-ptt-btn"
+            data-testid={speaking ? "voice-shutup-btn" : "voice-ptt-btn"}
             className="relative w-28 h-28 rounded-full flex items-center justify-center"
             style={{
-              background: recording
+              background: speaking
+                ? "linear-gradient(135deg, #6366f1, #4338ca)"
+                : recording
                 ? "linear-gradient(135deg, #ef4444, #c2410c)"
                 : processing
                 ? "var(--bud-panel-2)"
                 : "linear-gradient(135deg, var(--bud-amber), var(--bud-rust))",
-              boxShadow: recording
+              boxShadow: speaking
+                ? "0 0 0 8px rgba(99,102,241,0.18), 0 0 32px rgba(99,102,241,0.45)"
+                : recording
                 ? `0 0 0 ${8 + meterPct * 0.2}px rgba(239,68,68,0.16), 0 0 40px rgba(239,68,68,0.5)`
                 : "0 0 28px var(--bud-amber-glow)",
-              transform: recording ? "scale(1.04)" : "scale(1)",
+              transform: recording || speaking ? "scale(1.04)" : "scale(1)",
               cursor: processing ? "wait" : "pointer",
               transition: "box-shadow 80ms ease-out, transform 120ms ease",
               border: "none",
@@ -446,6 +510,8 @@ export default function VoicePanel({ showToast }) {
           >
             {processing ? (
               <Loader2 size={40} color="#0a0a0b" className="animate-spin" />
+            ) : speaking ? (
+              <Square size={36} color="#fff" strokeWidth={2.8} fill="#fff" />
             ) : recording ? (
               <Square size={36} color="#0a0a0b" strokeWidth={2.8} fill="#0a0a0b" />
             ) : (
@@ -455,7 +521,13 @@ export default function VoicePanel({ showToast }) {
         </div>
 
         <div className="text-[10px] tracking-[0.3em] text-[var(--bud-muted)] h-3" data-testid="voice-hint">
-          {processing ? "BUD IS THINKING…" : hint}
+          {processing
+            ? "BUD IS THINKING…"
+            : speaking
+            ? "TAP TO SHUT BUD UP"
+            : handsFree
+            ? recording ? "LISTENING — JUST TALK" : "TAP ONCE TO START THE LOOP"
+            : hint}
         </div>
 
         {recording && (
