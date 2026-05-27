@@ -72,8 +72,42 @@ export default function VoicePanel({ showToast }) {
     // eslint-disable-next-line
   }, [loadHistory]);
 
-  const playAudio = useCallback((b64) => {
+  const ensurePlaybackCtx = useCallback(async () => {
+    if (!playbackCtxRef.current) {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return null;
+      playbackCtxRef.current = new AC();
+    }
+    if (playbackCtxRef.current.state === "suspended") {
+      try { await playbackCtxRef.current.resume(); } catch (e) {}
+    }
+    return playbackCtxRef.current;
+  }, []);
+
+  const playAudio = useCallback(async (b64) => {
     if (!b64 || muted) return;
+    // Primary: Web Audio API — bypasses iOS silent-switch.
+    try {
+      const ctx = await ensurePlaybackCtx();
+      if (!ctx) throw new Error("no audio context");
+      const bin = atob(b64);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      // decodeAudioData mutates the buffer in some implementations — copy.
+      const buf = await ctx.decodeAudioData(bytes.buffer.slice(0));
+      if (currentSourceRef.current) {
+        try { currentSourceRef.current.stop(); } catch (e) {}
+      }
+      const src = ctx.createBufferSource();
+      src.buffer = buf;
+      src.connect(ctx.destination);
+      src.start();
+      currentSourceRef.current = src;
+      return;
+    } catch (e) {
+      // Fallback: classic <audio> element (will respect silent switch on iOS)
+      console.warn("WebAudio playback failed, falling back to <audio>", e);
+    }
     if (lastAudioUrlRef.current) URL.revokeObjectURL(lastAudioUrlRef.current);
     const blob = b64ToBlob(b64, "audio/mpeg");
     const url = URL.createObjectURL(blob);
@@ -82,7 +116,7 @@ export default function VoicePanel({ showToast }) {
       audioRef.current.src = url;
       audioRef.current.play().catch(() => {});
     }
-  }, [muted]);
+  }, [muted, ensurePlaybackCtx]);
 
   const submitAudio = async (blob, mime) => {
     setProcessing(true);
@@ -203,6 +237,9 @@ export default function VoicePanel({ showToast }) {
 
   const startRecording = async () => {
     if (recording || processing) return;
+    // Unlock the playback AudioContext on this user gesture so iOS lets us
+    // play audio later via Web Audio API (bypasses the silent switch).
+    await ensurePlaybackCtx();
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
