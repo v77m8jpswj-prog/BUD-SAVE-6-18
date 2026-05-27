@@ -110,6 +110,11 @@ function App() {
   const [replyBody, setReplyBody] = useState("");
   const [assets, setAssets] = useState([]);
   const [copiedAssetId, setCopiedAssetId] = useState(null);
+  const [sendOpen, setSendOpen] = useState(false);
+  const [sendTo, setSendTo] = useState("");
+  const [sendCc, setSendCc] = useState("");
+  const [sendSubject, setSendSubject] = useState("");
+  const [sendBody, setSendBody] = useState("");
 
   const showToast = (msg, kind = "ok") => {
     setToast({ msg, kind });
@@ -311,12 +316,86 @@ function App() {
     }
   };
 
+  const loadAssetIntoCompose = (asset) => {
+    const content = asset.content || "";
+    // Try to parse "To: ...\nSubject: ...\n\nbody"
+    let to = "";
+    let cc = "";
+    let subject = "";
+    let body = content;
+    const lines = content.split("\n");
+    let headerLines = 0;
+    for (let i = 0; i < Math.min(lines.length, 6); i++) {
+      const m = lines[i].match(/^(To|Cc|Subject):\s*(.+)$/i);
+      if (!m) break;
+      const key = m[1].toLowerCase();
+      const val = m[2].trim();
+      if (key === "to") to = val;
+      else if (key === "cc") cc = val;
+      else if (key === "subject") subject = val;
+      headerLines = i + 1;
+    }
+    if (headerLines > 0) {
+      // Drop header lines + leading blank line
+      let rest = lines.slice(headerLines);
+      while (rest.length && rest[0].trim() === "") rest.shift();
+      body = rest.join("\n");
+    } else if (asset.kind === "email" && asset.title) {
+      // Fallback: use title as subject prefix
+      subject = asset.title;
+    }
+    if (to) setSendTo(to);
+    if (cc) setSendCc(cc);
+    if (subject) setSendSubject(subject);
+    setSendBody(body);
+    setSendOpen(true);
+    showToast(`loaded "${asset.title}"`);
+  };
+
   const archiveAsset = async (asset) => {
     try {
       await axios.post(`${API}/bud/assets/${asset.id}/archive`);
       await refresh();
     } catch (e) {
       showToast("archive failed", "err");
+    }
+  };
+
+  const sendOutlookEmail = async ({ asDraft = false } = {}) => {
+    const toList = sendTo.split(/[,;\s]+/).map((s) => s.trim()).filter(Boolean);
+    const ccList = sendCc.split(/[,;\s]+/).map((s) => s.trim()).filter(Boolean);
+    if (toList.length === 0) {
+      showToast("To: required", "err");
+      return;
+    }
+    if (!sendSubject.trim()) {
+      showToast("Subject required", "err");
+      return;
+    }
+    if (!sendBody.trim()) {
+      showToast("Body required", "err");
+      return;
+    }
+    setBusy(true);
+    try {
+      const endpoint = asDraft ? "/outlook/draft-new" : "/outlook/send-new";
+      await axios.post(`${API}${endpoint}`, {
+        to: toList,
+        cc: ccList.length ? ccList : null,
+        subject: sendSubject,
+        body: sendBody,
+        content_type: "Text",
+      });
+      showToast(asDraft ? "draft saved in Outlook" : `sent to ${toList.join(", ")}`);
+      setSendTo("");
+      setSendCc("");
+      setSendSubject("");
+      setSendBody("");
+      setSendOpen(false);
+    } catch (e) {
+      showToast(e.response?.data?.detail || "send failed", "err");
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -474,7 +553,7 @@ function App() {
                       </pre>
 
                       <div className="flex items-center justify-between gap-2 mt-3">
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-2 flex-wrap">
                           <button
                             onClick={() => copyAsset(a)}
                             className="bud-btn-primary px-4 py-2 rounded text-sm inline-flex items-center gap-2"
@@ -486,6 +565,21 @@ function App() {
                               <><Clipboard size={14}/> COPY ALL</>
                             )}
                           </button>
+                          {outlook?.connected && (
+                            <button
+                              onClick={() => {
+                                loadAssetIntoCompose(a);
+                                document
+                                  .querySelector('[data-testid="outlook-compose-panel"]')
+                                  ?.scrollIntoView({ behavior: "smooth", block: "start" });
+                              }}
+                              className="bud-btn-ghost px-3 py-2 rounded text-sm inline-flex items-center gap-2"
+                              data-testid={`asset-use-${a.id}`}
+                              style={{ borderColor: "var(--bud-amber)", color: "var(--bud-amber)" }}
+                            >
+                              <Send size={14}/> USE IN COMPOSE
+                            </button>
+                          )}
                           {a.related_url && (
                             <a
                               href={a.related_url}
@@ -594,6 +688,13 @@ function App() {
               outlook?.connected ? (
                 <div className="flex items-center gap-2">
                   <button
+                    onClick={() => setSendOpen((v) => !v)}
+                    className="bud-btn-primary px-3 py-2 rounded text-sm inline-flex items-center gap-2"
+                    data-testid="outlook-compose-btn"
+                  >
+                    <Send size={14} /> {sendOpen ? "close" : "new email"}
+                  </button>
+                  <button
                     onClick={loadInbox}
                     disabled={outlookLoading}
                     className="bud-btn-ghost px-3 py-2 rounded text-sm inline-flex items-center gap-2"
@@ -632,13 +733,138 @@ function App() {
                 (<code>Mail.Read</code>, <code>Mail.Send</code>, <code>Mail.ReadWrite</code>,
                 <code>User.Read</code>, <code>offline_access</code>). You'll land back here.
               </div>
-            ) : outlookLoading && outlookMail.length === 0 ? (
-              <div className="text-xs text-[var(--bud-muted)] py-6 text-center">loading inbox…</div>
-            ) : outlookMail.length === 0 ? (
-              <div className="text-xs text-[var(--bud-muted)] py-6 text-center">
-                inbox empty — or no messages in the last batch.
-              </div>
             ) : (
+              <>
+                {sendOpen && (
+                  <div className="bud-card-inset p-4 mb-4 space-y-3" data-testid="outlook-compose-panel">
+                    {assets.length > 0 && (
+                      <div
+                        className="rounded p-3 mb-1"
+                        style={{
+                          background: "rgba(245,158,11,0.06)",
+                          border: "1px dashed rgba(245,158,11,0.35)",
+                        }}
+                        data-testid="compose-asset-picker"
+                      >
+                        <div className="flex items-center justify-between mb-2">
+                          <div className="text-[10px] tracking-[0.25em] text-[var(--bud-amber)]">
+                            BUD WROTE THESE FOR YOU — TAP TO LOAD
+                          </div>
+                          <div className="text-[10px] text-[var(--bud-muted)]">
+                            {assets.length} ready
+                          </div>
+                        </div>
+                        <div className="space-y-1.5 max-h-44 overflow-auto pr-1">
+                          {assets.slice(0, 8).map((a) => (
+                            <button
+                              key={a.id}
+                              onClick={() => loadAssetIntoCompose(a)}
+                              className="w-full text-left bud-card-inset px-3 py-2 hover:border-[var(--bud-amber)] transition-colors"
+                              data-testid={`compose-asset-use-${a.id}`}
+                            >
+                              <div className="flex items-center justify-between gap-2">
+                                <div className="min-w-0 flex-1">
+                                  <div className="text-xs text-[var(--bud-text)] font-semibold truncate">
+                                    {a.title}
+                                  </div>
+                                  <div className="text-[10px] text-[var(--bud-muted)] truncate">
+                                    {(a.content || "").slice(0, 90)}…
+                                  </div>
+                                </div>
+                                <span
+                                  className="text-[10px] tracking-widest uppercase px-2 py-0.5 rounded"
+                                  style={{
+                                    background: "var(--bud-amber)",
+                                    color: "#0a0a0b",
+                                    fontWeight: 600,
+                                  }}
+                                >
+                                  use →
+                                </span>
+                              </div>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      <div>
+                        <div className="text-[10px] tracking-[0.25em] text-[var(--bud-muted)] mb-1.5">TO</div>
+                        <input
+                          type="text"
+                          placeholder="recipient@example.com (comma or space separated)"
+                          value={sendTo}
+                          onChange={(e) => setSendTo(e.target.value)}
+                          className="bud-input w-full px-3 py-2 rounded text-xs"
+                          data-testid="outlook-to-input"
+                        />
+                      </div>
+                      <div>
+                        <div className="text-[10px] tracking-[0.25em] text-[var(--bud-muted)] mb-1.5">CC (optional)</div>
+                        <input
+                          type="text"
+                          placeholder="cc@example.com"
+                          value={sendCc}
+                          onChange={(e) => setSendCc(e.target.value)}
+                          className="bud-input w-full px-3 py-2 rounded text-xs"
+                          data-testid="outlook-cc-input"
+                        />
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-[10px] tracking-[0.25em] text-[var(--bud-muted)] mb-1.5">SUBJECT</div>
+                      <input
+                        type="text"
+                        placeholder="subject line"
+                        value={sendSubject}
+                        onChange={(e) => setSendSubject(e.target.value)}
+                        className="bud-input w-full px-3 py-2 rounded text-sm"
+                        data-testid="outlook-subject-input"
+                      />
+                    </div>
+                    <div>
+                      <div className="text-[10px] tracking-[0.25em] text-[var(--bud-muted)] mb-1.5">BODY</div>
+                      <textarea
+                        placeholder="write your email. plain text. Doc's voice — direct, no fluff."
+                        value={sendBody}
+                        onChange={(e) => setSendBody(e.target.value)}
+                        rows={10}
+                        className="bud-input w-full px-3 py-2 rounded text-sm leading-relaxed"
+                        data-testid="outlook-body-input"
+                      />
+                    </div>
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="text-[10px] text-[var(--bud-muted)]">
+                        sends as <code>{outlook.email}</code>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => sendOutlookEmail({ asDraft: true })}
+                          disabled={busy}
+                          className="bud-btn-ghost px-3 py-2 rounded text-sm"
+                          data-testid="outlook-save-draft-btn"
+                        >
+                          save as draft
+                        </button>
+                        <button
+                          onClick={() => sendOutlookEmail({ asDraft: false })}
+                          disabled={busy}
+                          className="bud-btn-primary px-4 py-2 rounded text-sm inline-flex items-center gap-2"
+                          data-testid="outlook-send-now-btn"
+                        >
+                          <Send size={14} /> SEND NOW
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+                {outlookLoading && outlookMail.length === 0 ? (
+                  <div className="text-xs text-[var(--bud-muted)] py-6 text-center">loading inbox…</div>
+                ) : outlookMail.length === 0 ? (
+                  <div className="text-xs text-[var(--bud-muted)] py-6 text-center">
+                    inbox empty — or no messages in the last batch.
+                  </div>
+                ) : (
               <div className="space-y-2 max-h-[480px] overflow-auto pr-1">
                 {outlookMail.map((m) => (
                   <div
@@ -695,6 +921,8 @@ function App() {
                   </div>
                 ))}
               </div>
+            )}
+              </>
             )}
           </Section>
 
