@@ -282,6 +282,35 @@ class DraftReplyRequest(BaseModel):
     body: str
 
 
+class NewDraftRequest(BaseModel):
+    to: list[str]
+    cc: Optional[list[str]] = None
+    subject: str
+    body: str
+    content_type: str = "Text"  # or "HTML"
+
+
+@router.post("/draft-new")
+async def create_new_draft(req: NewDraftRequest, request: Request):
+    db = request.app.state.db
+    message = {
+        "subject": req.subject,
+        "body": {"contentType": req.content_type, "content": req.body},
+        "toRecipients": [{"emailAddress": {"address": a}} for a in req.to],
+    }
+    if req.cc:
+        message["ccRecipients"] = [{"emailAddress": {"address": a}} for a in req.cc]
+    r = await _graph(db, "POST", "/me/messages", json_body=message)
+    if r.status_code not in (200, 201):
+        raise HTTPException(status_code=r.status_code, detail=f"draft create failed: {r.text[:300]}")
+    draft = r.json()
+    return {
+        "draft_id": draft["id"],
+        "web_link": draft.get("webLink"),
+        "subject": draft.get("subject"),
+    }
+
+
 @router.post("/draft")
 async def create_draft(req: DraftReplyRequest, request: Request):
     db = request.app.state.db
