@@ -16,6 +16,7 @@ from starlette.middleware.cors import CORSMiddleware
 
 from agent_mail import router as agent_mail_router
 from outlook import router as outlook_router
+from bud_assets import router as bud_assets_router
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
@@ -84,6 +85,7 @@ async def get_status_checks():
 app.include_router(api_router)
 app.include_router(agent_mail_router)
 app.include_router(outlook_router)
+app.include_router(bud_assets_router)
 
 app.add_middleware(
     CORSMiddleware,

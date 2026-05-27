@@ -16,6 +16,9 @@ import {
   Link2Off,
   ExternalLink,
   Paperclip,
+  Clipboard,
+  Archive,
+  Package,
 } from "lucide-react";
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
@@ -105,6 +108,8 @@ function App() {
   const [outlookLoading, setOutlookLoading] = useState(false);
   const [replyFor, setReplyFor] = useState(null);
   const [replyBody, setReplyBody] = useState("");
+  const [assets, setAssets] = useState([]);
+  const [copiedAssetId, setCopiedAssetId] = useState(null);
 
   const showToast = (msg, kind = "ok") => {
     setToast({ msg, kind });
@@ -113,16 +118,18 @@ function App() {
 
   const refresh = useCallback(async () => {
     try {
-      const [h, c, l, o] = await Promise.all([
+      const [h, c, l, o, a] = await Promise.all([
         axios.get(`${API}/health`),
         axios.get(`${API}/agent-mail/config`),
         axios.get(`${API}/agent-mail/letters?limit=100`),
         axios.get(`${API}/outlook/status`),
+        axios.get(`${API}/bud/assets?limit=50`),
       ]);
       setHealth(h.data);
       setConfig(c.data);
       setLetters(l.data.letters || []);
       setOutlook(o.data);
+      setAssets(a.data.assets || []);
       if (!baseUrlInput && c.data.bud_base_url) setBaseUrlInput(c.data.bud_base_url);
     } catch (e) {
       console.error("refresh failed", e);
@@ -293,6 +300,26 @@ function App() {
     }
   };
 
+  const copyAsset = async (asset) => {
+    try {
+      await navigator.clipboard.writeText(asset.content);
+      setCopiedAssetId(asset.id);
+      showToast("copied to clipboard");
+      setTimeout(() => setCopiedAssetId(null), 1800);
+    } catch (e) {
+      showToast("copy failed — long-press the block", "err");
+    }
+  };
+
+  const archiveAsset = async (asset) => {
+    try {
+      await axios.post(`${API}/bud/assets/${asset.id}/archive`);
+      await refresh();
+    } catch (e) {
+      showToast("archive failed", "err");
+    }
+  };
+
   const inboxOK = !!(config && config.bud_base_url);
   const ogReady = !!(config && config.og_outbound_token_set);
   const nineReady = !!(config && config.nine_outbound_token_set);
@@ -384,6 +411,109 @@ function App() {
       <main className="max-w-6xl mx-auto px-6 py-8 grid grid-cols-1 lg:grid-cols-3 gap-6 stagger">
         {/* LEFT — Identity / inbox creds */}
         <div className="lg:col-span-2 space-y-6">
+          <Section
+            title="Quick Assets"
+            kicker={`BUD → DOC · ${assets.length} ready`}
+            right={
+              <span className="text-[10px] tracking-[0.25em] text-[var(--bud-muted)]">
+                one-tap copy
+              </span>
+            }
+          >
+            {assets.length === 0 ? (
+              <div className="text-xs text-[var(--bud-muted)] py-6 text-center" data-testid="assets-empty">
+                nothing queued. when Bud generates content for you (email body, snippet,
+                address, login info, talking points) it lands here with a copy button.
+              </div>
+            ) : (
+              <div className="space-y-3 max-h-[520px] overflow-auto pr-1">
+                {assets.map((a) => {
+                  const lines = (a.content || "").split("\n").length;
+                  const preview = (a.content || "").slice(0, 280);
+                  const truncated = (a.content || "").length > 280;
+                  return (
+                    <div
+                      key={a.id}
+                      className="bud-card-inset p-4"
+                      data-testid={`asset-${a.id}`}
+                    >
+                      <div className="flex items-start justify-between gap-3 mb-2">
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2 mb-1">
+                            <span
+                              className="text-[10px] uppercase tracking-widest px-1.5 py-0.5 rounded"
+                              style={{
+                                background: "rgba(245,158,11,0.12)",
+                                color: "var(--bud-amber)",
+                                border: "1px solid rgba(245,158,11,0.3)",
+                              }}
+                            >
+                              {a.kind}
+                            </span>
+                            <span className="text-[10px] text-[var(--bud-muted)]">
+                              {lines} {lines === 1 ? "line" : "lines"} ·{" "}
+                              {new Date(a.created_at).toLocaleString()}
+                            </span>
+                          </div>
+                          <div className="text-sm text-[var(--bud-text)] font-semibold truncate">
+                            {a.title}
+                          </div>
+                          {a.note && (
+                            <div className="text-[11px] text-[var(--bud-muted)] mt-1 leading-relaxed">
+                              {a.note}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      <pre
+                        className="text-xs text-[var(--bud-text)] whitespace-pre-wrap break-words leading-relaxed bg-[#0a0a0b] border border-[var(--bud-line)] rounded p-3 max-h-40 overflow-auto"
+                        data-testid={`asset-content-${a.id}`}
+                      >
+{preview}{truncated ? "…" : ""}
+                      </pre>
+
+                      <div className="flex items-center justify-between gap-2 mt-3">
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => copyAsset(a)}
+                            className="bud-btn-primary px-4 py-2 rounded text-sm inline-flex items-center gap-2"
+                            data-testid={`asset-copy-${a.id}`}
+                          >
+                            {copiedAssetId === a.id ? (
+                              <><Check size={14}/> copied</>
+                            ) : (
+                              <><Clipboard size={14}/> COPY ALL</>
+                            )}
+                          </button>
+                          {a.related_url && (
+                            <a
+                              href={a.related_url}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="bud-btn-ghost px-3 py-2 rounded text-sm inline-flex items-center gap-2"
+                              data-testid={`asset-open-${a.id}`}
+                            >
+                              <ExternalLink size={14}/> open
+                            </a>
+                          )}
+                        </div>
+                        <button
+                          onClick={() => archiveAsset(a)}
+                          className="text-[10px] tracking-wider uppercase text-[var(--bud-muted)] hover:text-[var(--bud-text)] inline-flex items-center gap-1"
+                          data-testid={`asset-archive-${a.id}`}
+                        >
+                          <Archive size={11}/> archive
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </Section>
+
+
           <Section
             title="The Pipe"
             kicker="DAY 1 / NODE BOOT"
