@@ -1,10 +1,16 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import axios from "axios";
-import { Mic, MicOff, Volume2, Trash2, Loader2, Send, RefreshCw } from "lucide-react";
+import { Mic, MicOff, Volume2, Trash2, Loader2, Send, Square } from "lucide-react";
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
 const SESSION_KEY = "bud_voice_session_id";
+
+// Silence detection tuning
+const SILENCE_THRESHOLD = 0.012; // RMS — anything below this is "silent"
+const SILENCE_HANGOVER_MS = 1800; // stop after this much continuous silence
+const MIN_SPEECH_MS = 350; // must have spoken at least this long
+const MAX_RECORDING_MS = 60_000; // hard cap
 
 function ensureSessionId() {
   let s = localStorage.getItem(SESSION_KEY);
@@ -30,24 +36,39 @@ export default function VoicePanel({ showToast }) {
   const [muted, setMuted] = useState(false);
   const [typed, setTyped] = useState("");
   const [config, setConfig] = useState(null);
+  const [level, setLevel] = useState(0); // 0..1 live mic RMS for the meter
+  const [hint, setHint] = useState("TAP TO TALK");
+
   const mediaRecorderRef = useRef(null);
   const chunksRef = useRef([]);
   const streamRef = useRef(null);
+  const audioCtxRef = useRef(null);
+  const analyserRef = useRef(null);
+  const rafRef = useRef(null);
   const audioRef = useRef(null);
   const lastAudioUrlRef = useRef(null);
+
+  // Speech-state refs (avoid stale closures from RAF)
+  const startedAtRef = useRef(0);
+  const lastVoiceAtRef = useRef(0);
+  const hasVoicedRef = useRef(false);
+  const maxStopTimeoutRef = useRef(null);
+  const cancelledRef = useRef(false);
 
   const loadHistory = useCallback(async () => {
     try {
       const r = await axios.get(`${API}/voice/history?session_id=${sessionId}&limit=50`);
       setHistory(r.data.turns || []);
     } catch (e) {
-      console.error("history load failed", e);
+      // ignore
     }
   }, [sessionId]);
 
   useEffect(() => {
     axios.get(`${API}/voice/config`).then((r) => setConfig(r.data)).catch(() => {});
     loadHistory();
+    return () => cleanupAudio();
+    // eslint-disable-next-line
   }, [loadHistory]);
 
   const playAudio = useCallback((b64) => {
@@ -102,11 +123,85 @@ export default function VoicePanel({ showToast }) {
     }
   };
 
+  const cleanupAudio = () => {
+    if (rafRef.current) {
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+    }
+    if (maxStopTimeoutRef.current) {
+      clearTimeout(maxStopTimeoutRef.current);
+      maxStopTimeoutRef.current = null;
+    }
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((t) => t.stop());
+      streamRef.current = null;
+    }
+    if (audioCtxRef.current) {
+      try { audioCtxRef.current.close(); } catch (e) {}
+      audioCtxRef.current = null;
+    }
+    analyserRef.current = null;
+    setLevel(0);
+  };
+
+  const stopRecording = useCallback(({ cancel = false } = {}) => {
+    cancelledRef.current = cancel;
+    if (!recording) {
+      cleanupAudio();
+      return;
+    }
+    try { mediaRecorderRef.current?.stop(); } catch (e) {}
+    setRecording(false);
+  }, [recording]);
+
+  const tickVAD = () => {
+    const analyser = analyserRef.current;
+    if (!analyser) return;
+    const buf = new Float32Array(analyser.fftSize);
+    analyser.getFloatTimeDomainData(buf);
+    let sum = 0;
+    for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
+    const rms = Math.sqrt(sum / buf.length);
+    setLevel(Math.min(1, rms * 10));
+
+    const now = performance.now();
+    if (rms > SILENCE_THRESHOLD) {
+      lastVoiceAtRef.current = now;
+      if (!hasVoicedRef.current && now - startedAtRef.current > 80) {
+        hasVoicedRef.current = true;
+        setHint("LISTENING…");
+      }
+    } else if (hasVoicedRef.current) {
+      const silentFor = now - lastVoiceAtRef.current;
+      const totalSpeech = lastVoiceAtRef.current - startedAtRef.current;
+      if (silentFor > SILENCE_HANGOVER_MS && totalSpeech > MIN_SPEECH_MS) {
+        // Auto-stop
+        stopRecording();
+        return;
+      }
+    }
+    rafRef.current = requestAnimationFrame(tickVAD);
+  };
+
   const startRecording = async () => {
     if (recording || processing) return;
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+      });
       streamRef.current = stream;
+
+      // VAD setup
+      const AC = window.AudioContext || window.webkitAudioContext;
+      const ctx = new AC();
+      audioCtxRef.current = ctx;
+      const src = ctx.createMediaStreamSource(stream);
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 1024;
+      src.connect(analyser);
+      analyserRef.current = analyser;
+
+      // Recorder
       const mime = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
         ? "audio/webm;codecs=opus"
         : MediaRecorder.isTypeSupported("audio/webm")
@@ -115,36 +210,48 @@ export default function VoicePanel({ showToast }) {
       const mr = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
       mediaRecorderRef.current = mr;
       chunksRef.current = [];
+      cancelledRef.current = false;
+      hasVoicedRef.current = false;
       mr.ondataavailable = (e) => {
         if (e.data && e.data.size > 0) chunksRef.current.push(e.data);
       };
       mr.onstop = async () => {
+        const wasCancelled = cancelledRef.current;
+        const voiced = hasVoicedRef.current;
         const blob = new Blob(chunksRef.current, { type: mime || "audio/webm" });
-        // Cleanup mic
-        if (streamRef.current) {
-          streamRef.current.getTracks().forEach((t) => t.stop());
-          streamRef.current = null;
+        cleanupAudio();
+        setHint("TAP TO TALK");
+        if (wasCancelled) return;
+        if (!voiced || blob.size < 1500) {
+          showToast?.("didn't catch anything — tap and try again", "err");
+          return;
         }
-        if (blob.size > 800) {
-          await submitAudio(blob);
-        } else {
-          showToast?.("too quiet — try again", "err");
-        }
+        await submitAudio(blob);
       };
       mr.start();
+
+      startedAtRef.current = performance.now();
+      lastVoiceAtRef.current = startedAtRef.current;
       setRecording(true);
+      setHint("WAITING FOR YOU…");
+      rafRef.current = requestAnimationFrame(tickVAD);
+
+      maxStopTimeoutRef.current = setTimeout(() => {
+        if (recording) stopRecording();
+      }, MAX_RECORDING_MS);
     } catch (e) {
+      cleanupAudio();
       showToast?.("mic blocked — allow microphone access in your browser", "err");
     }
   };
 
-  const stopRecording = () => {
-    if (!recording) return;
-    try {
-      mediaRecorderRef.current?.stop();
-    } catch (e) {}
-    setRecording(false);
+  const handlePttClick = () => {
+    if (processing) return;
+    if (recording) stopRecording();
+    else startRecording();
   };
+
+  const cancelRecording = () => stopRecording({ cancel: true });
 
   const clearSession = async () => {
     if (!window.confirm("Wipe this voice conversation?")) return;
@@ -157,7 +264,7 @@ export default function VoicePanel({ showToast }) {
     }
   };
 
-  const replay = (b64) => playAudio(b64);
+  const meterPct = Math.round(level * 100);
 
   return (
     <section className="bud-card p-5 fade-in" data-testid="section-talk-to-bud">
@@ -173,7 +280,7 @@ export default function VoicePanel({ showToast }) {
             onClick={() => setMuted((v) => !v)}
             className="bud-btn-ghost px-3 py-2 rounded text-sm inline-flex items-center gap-2"
             data-testid="voice-mute-btn"
-            title={muted ? "voice OFF — Bud will reply in text only" : "voice ON — Bud speaks"}
+            title={muted ? "voice OFF — text replies only" : "voice ON — Bud speaks"}
           >
             <Volume2 size={14} className={muted ? "opacity-40" : ""} />
             {muted ? "muted" : "speaking"}
@@ -189,40 +296,69 @@ export default function VoicePanel({ showToast }) {
         </div>
       </div>
 
-      <div className="flex flex-col items-center gap-3 py-4">
-        <button
-          onMouseDown={startRecording}
-          onMouseUp={stopRecording}
-          onMouseLeave={() => recording && stopRecording()}
-          onTouchStart={(e) => { e.preventDefault(); startRecording(); }}
-          onTouchEnd={(e) => { e.preventDefault(); stopRecording(); }}
-          disabled={processing}
-          data-testid="voice-ptt-btn"
-          className="relative w-24 h-24 rounded-full flex items-center justify-center transition-all duration-150"
-          style={{
-            background: recording
-              ? "linear-gradient(135deg, #ef4444, #c2410c)"
-              : processing
-              ? "var(--bud-panel-2)"
-              : "linear-gradient(135deg, var(--bud-amber), var(--bud-rust))",
-            boxShadow: recording
-              ? "0 0 0 8px rgba(239,68,68,0.18), 0 0 32px rgba(239,68,68,0.4)"
-              : "0 0 28px var(--bud-amber-glow)",
-            transform: recording ? "scale(1.06)" : "scale(1)",
-            cursor: processing ? "wait" : "pointer",
-          }}
-        >
-          {processing ? (
-            <Loader2 size={36} color="#0a0a0b" className="animate-spin" />
-          ) : recording ? (
-            <MicOff size={36} color="#0a0a0b" strokeWidth={2.5} />
-          ) : (
-            <Mic size={36} color="#0a0a0b" strokeWidth={2.5} />
+      <div className="flex flex-col items-center gap-3 py-5">
+        <div className="relative">
+          {recording && (
+            <div
+              aria-hidden
+              style={{
+                position: "absolute",
+                inset: -10 - meterPct * 0.18,
+                borderRadius: "9999px",
+                background:
+                  "radial-gradient(circle, rgba(245,158,11,0.25) 0%, rgba(245,158,11,0) 70%)",
+                pointerEvents: "none",
+                transition: "inset 80ms ease-out",
+              }}
+            />
           )}
-        </button>
-        <div className="text-[10px] tracking-[0.3em] text-[var(--bud-muted)]">
-          {processing ? "BUD IS THINKING…" : recording ? "HOLD & TALK · RELEASE TO SEND" : "HOLD TO TALK"}
+          <button
+            onClick={handlePttClick}
+            disabled={processing}
+            data-testid="voice-ptt-btn"
+            className="relative w-28 h-28 rounded-full flex items-center justify-center"
+            style={{
+              background: recording
+                ? "linear-gradient(135deg, #ef4444, #c2410c)"
+                : processing
+                ? "var(--bud-panel-2)"
+                : "linear-gradient(135deg, var(--bud-amber), var(--bud-rust))",
+              boxShadow: recording
+                ? `0 0 0 ${8 + meterPct * 0.2}px rgba(239,68,68,0.16), 0 0 40px rgba(239,68,68,0.5)`
+                : "0 0 28px var(--bud-amber-glow)",
+              transform: recording ? "scale(1.04)" : "scale(1)",
+              cursor: processing ? "wait" : "pointer",
+              transition: "box-shadow 80ms ease-out, transform 120ms ease",
+              border: "none",
+            }}
+          >
+            {processing ? (
+              <Loader2 size={40} color="#0a0a0b" className="animate-spin" />
+            ) : recording ? (
+              <Square size={36} color="#0a0a0b" strokeWidth={2.8} fill="#0a0a0b" />
+            ) : (
+              <Mic size={40} color="#0a0a0b" strokeWidth={2.5} />
+            )}
+          </button>
         </div>
+
+        <div className="text-[10px] tracking-[0.3em] text-[var(--bud-muted)] h-3" data-testid="voice-hint">
+          {processing ? "BUD IS THINKING…" : hint}
+        </div>
+
+        {recording && (
+          <div className="flex items-center gap-2 text-[10px] tracking-widest text-[var(--bud-muted)]">
+            <span>AUTO-STOPS ON SILENCE</span>
+            <span>·</span>
+            <button
+              onClick={cancelRecording}
+              className="hover:text-[var(--bud-red)] uppercase tracking-widest"
+              data-testid="voice-cancel-btn"
+            >
+              cancel
+            </button>
+          </div>
+        )}
       </div>
 
       <div className="flex items-center gap-2 mt-2">
