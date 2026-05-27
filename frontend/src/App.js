@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from "react";
 import "@/App.css";
 import axios from "axios";
+import VoicePanel from "./VoicePanel";
 import {
   Hammer,
   Mail,
@@ -22,6 +23,11 @@ import {
   Sunrise,
   Play,
   Clock,
+  Mic,
+  MicOff,
+  Volume2,
+  Trash2,
+  Loader2,
 } from "lucide-react";
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
@@ -518,6 +524,7 @@ function App() {
       <main className="max-w-6xl mx-auto px-6 py-8 grid grid-cols-1 lg:grid-cols-3 gap-6 stagger">
         {/* LEFT — Identity / inbox creds */}
         <div className="lg:col-span-2 space-y-6">
+          <VoicePanel showToast={showToast} />
           <Section
             title="Daily Briefing"
             kicker={
