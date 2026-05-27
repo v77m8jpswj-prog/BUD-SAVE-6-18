@@ -7,10 +7,10 @@ const API = `${BACKEND_URL}/api`;
 const SESSION_KEY = "bud_voice_session_id";
 
 // Silence detection tuning
-const SILENCE_THRESHOLD = 0.012; // RMS — anything below this is "silent"
-const SILENCE_HANGOVER_MS = 1800; // stop after this much continuous silence
-const MIN_SPEECH_MS = 350; // must have spoken at least this long
+const SILENCE_THRESHOLD_FLOOR = 0.004; // very quiet shop. Adaptive baseline added on top.
+const SILENCE_HANGOVER_MS = 2200; // stop after this much continuous silence
 const MAX_RECORDING_MS = 60_000; // hard cap
+const MIN_BLOB_BYTES = 400; // anything smaller than this isn't audio at all
 
 function ensureSessionId() {
   let s = localStorage.getItem(SESSION_KEY);
@@ -51,7 +51,8 @@ export default function VoicePanel({ showToast }) {
   // Speech-state refs (avoid stale closures from RAF)
   const startedAtRef = useRef(0);
   const lastVoiceAtRef = useRef(0);
-  const hasVoicedRef = useRef(false);
+  const noiseFloorRef = useRef(SILENCE_THRESHOLD_FLOOR);
+  const peakLevelRef = useRef(0);
   const maxStopTimeoutRef = useRef(null);
   const cancelledRef = useRef(false);
 
@@ -83,11 +84,16 @@ export default function VoicePanel({ showToast }) {
     }
   }, [muted]);
 
-  const submitAudio = async (blob) => {
+  const submitAudio = async (blob, mime) => {
     setProcessing(true);
     try {
       const fd = new FormData();
-      fd.append("audio", blob, "turn.webm");
+      // Extension hint from mime so the backend picks the right Whisper suffix
+      const ext =
+        (mime || "").includes("mp4") ? "mp4" :
+        (mime || "").includes("ogg") ? "ogg" :
+        (mime || "").includes("wav") ? "wav" : "webm";
+      fd.append("audio", blob, `turn.${ext}`);
       fd.append("session_id", sessionId);
       fd.append("speak", muted ? "false" : "true");
       const r = await axios.post(`${API}/voice/turn`, fd, {
@@ -97,7 +103,12 @@ export default function VoicePanel({ showToast }) {
       playAudio(r.data.audio_base64);
       await loadHistory();
     } catch (e) {
-      showToast?.(e.response?.data?.detail || "voice turn failed", "err");
+      const detail = e.response?.data?.detail || "";
+      if (e.response?.status === 422 || /no speech/i.test(detail)) {
+        showToast?.("Whisper heard nothing — talk closer to the mic", "err");
+      } else {
+        showToast?.(detail || "voice turn failed", "err");
+      }
     } finally {
       setProcessing(false);
     }
@@ -162,20 +173,27 @@ export default function VoicePanel({ showToast }) {
     let sum = 0;
     for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
     const rms = Math.sqrt(sum / buf.length);
-    setLevel(Math.min(1, rms * 10));
+    setLevel(Math.min(1, rms * 14));
+    if (rms > peakLevelRef.current) peakLevelRef.current = rms;
 
     const now = performance.now();
-    if (rms > SILENCE_THRESHOLD) {
+    const elapsed = now - startedAtRef.current;
+
+    // Calibrate noise floor during first 250ms (treat as ambient)
+    if (elapsed < 250) {
+      noiseFloorRef.current = Math.max(noiseFloorRef.current, rms);
+      rafRef.current = requestAnimationFrame(tickVAD);
+      return;
+    }
+
+    const threshold = Math.max(SILENCE_THRESHOLD_FLOOR, noiseFloorRef.current * 1.8);
+    if (rms > threshold) {
       lastVoiceAtRef.current = now;
-      if (!hasVoicedRef.current && now - startedAtRef.current > 80) {
-        hasVoicedRef.current = true;
-        setHint("LISTENING…");
-      }
-    } else if (hasVoicedRef.current) {
+      setHint("LISTENING…");
+    } else {
       const silentFor = now - lastVoiceAtRef.current;
-      const totalSpeech = lastVoiceAtRef.current - startedAtRef.current;
-      if (silentFor > SILENCE_HANGOVER_MS && totalSpeech > MIN_SPEECH_MS) {
-        // Auto-stop
+      // Need at least 1s of recording before auto-stop kicks in
+      if (elapsed > 1000 && silentFor > SILENCE_HANGOVER_MS) {
         stopRecording();
         return;
       }
@@ -201,34 +219,42 @@ export default function VoicePanel({ showToast }) {
       src.connect(analyser);
       analyserRef.current = analyser;
 
-      // Recorder
-      const mime = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
-        ? "audio/webm;codecs=opus"
-        : MediaRecorder.isTypeSupported("audio/webm")
-        ? "audio/webm"
-        : "";
+      // Recorder — prefer webm/opus, fall back to mp4 (Safari/iOS)
+      let mime = "";
+      const candidates = [
+        "audio/webm;codecs=opus",
+        "audio/webm",
+        "audio/mp4;codecs=mp4a.40.2",
+        "audio/mp4",
+        "audio/ogg;codecs=opus",
+        "audio/ogg",
+      ];
+      for (const c of candidates) {
+        if (window.MediaRecorder?.isTypeSupported?.(c)) { mime = c; break; }
+      }
       const mr = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
       mediaRecorderRef.current = mr;
       chunksRef.current = [];
       cancelledRef.current = false;
-      hasVoicedRef.current = false;
+      peakLevelRef.current = 0;
       mr.ondataavailable = (e) => {
         if (e.data && e.data.size > 0) chunksRef.current.push(e.data);
       };
       mr.onstop = async () => {
         const wasCancelled = cancelledRef.current;
-        const voiced = hasVoicedRef.current;
-        const blob = new Blob(chunksRef.current, { type: mime || "audio/webm" });
+        const recMime = mr.mimeType || mime || "audio/webm";
+        const blob = new Blob(chunksRef.current, { type: recMime });
         cleanupAudio();
         setHint("TAP TO TALK");
         if (wasCancelled) return;
-        if (!voiced || blob.size < 1500) {
-          showToast?.("didn't catch anything — tap and try again", "err");
+        if (blob.size < MIN_BLOB_BYTES) {
+          showToast?.("mic didn't catch any audio — check permission + try again", "err");
           return;
         }
-        await submitAudio(blob);
+        // Let Whisper decide whether it's speech. If empty, backend returns 422.
+        await submitAudio(blob, recMime);
       };
-      mr.start();
+      mr.start(250); // emit chunks every 250ms so we have data even if user stops fast
 
       startedAtRef.current = performance.now();
       lastVoiceAtRef.current = startedAtRef.current;
