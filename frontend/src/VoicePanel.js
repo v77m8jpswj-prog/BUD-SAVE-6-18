@@ -361,6 +361,53 @@ export default function VoicePanel({ showToast }) {
         </div>
       </div>
 
+      {history.length > 0 && (
+        <div className="space-y-3 max-h-[420px] overflow-auto pr-1 mb-2" data-testid="voice-history">
+          {[...history].reverse().map((t) => (
+            <div key={t.id} className="space-y-1.5 fade-in">
+              <div
+                className="bud-card-inset p-3"
+                style={{
+                  background: "rgba(245,158,11,0.04)",
+                  borderColor: "rgba(245,158,11,0.25)",
+                }}
+                data-testid={`voice-bud-${t.id}`}
+              >
+                <div className="text-[10px] tracking-widest text-[var(--bud-amber)] mb-1">BUD</div>
+                <div className="text-sm text-[var(--bud-text)] leading-relaxed whitespace-pre-wrap">
+                  {t.bud_text}
+                </div>
+                {t.bud_text && (
+                  <button
+                    onClick={async () => {
+                      try {
+                        const r = await axios.post(`${API}/voice/text-turn`, {
+                          text: t.user_text,
+                          session_id: sessionId,
+                          speak: true,
+                        });
+                        playAudio(r.data.audio_base64);
+                      } catch (e) {}
+                    }}
+                    className="text-[10px] tracking-widest uppercase text-[var(--bud-muted)] hover:text-[var(--bud-amber)] mt-1.5 inline-flex items-center gap-1"
+                    data-testid={`voice-replay-${t.id}`}
+                    title="re-ask same question and replay reply"
+                  >
+                    <Volume2 size={10} /> replay
+                  </button>
+                )}
+              </div>
+              <div className="bud-card-inset p-3" data-testid={`voice-user-${t.id}`}>
+                <div className="text-[10px] tracking-widest text-[var(--bud-muted)] mb-1">
+                  DOC {t.input_was_audio ? "· voice" : "· typed"} · {new Date(t.created_at).toLocaleTimeString()}
+                </div>
+                <div className="text-sm text-[var(--bud-text)]">{t.user_text}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
       <div className="flex flex-col items-center gap-3 py-5">
         <div className="relative">
           {recording && (
@@ -448,31 +495,7 @@ export default function VoicePanel({ showToast }) {
       </div>
 
       {history.length > 0 && (
-        <div className="mt-5 space-y-3 max-h-[420px] overflow-auto pr-1" data-testid="voice-history">
-          {history.map((t) => (
-            <div key={t.id} className="space-y-1.5 fade-in">
-              <div className="bud-card-inset p-3" data-testid={`voice-user-${t.id}`}>
-                <div className="text-[10px] tracking-widest text-[var(--bud-muted)] mb-1">
-                  DOC {t.input_was_audio ? "· voice" : "· typed"} · {new Date(t.created_at).toLocaleTimeString()}
-                </div>
-                <div className="text-sm text-[var(--bud-text)]">{t.user_text}</div>
-              </div>
-              <div
-                className="bud-card-inset p-3"
-                style={{
-                  background: "rgba(245,158,11,0.04)",
-                  borderColor: "rgba(245,158,11,0.25)",
-                }}
-                data-testid={`voice-bud-${t.id}`}
-              >
-                <div className="text-[10px] tracking-widest text-[var(--bud-amber)] mb-1">BUD</div>
-                <div className="text-sm text-[var(--bud-text)] leading-relaxed whitespace-pre-wrap">
-                  {t.bud_text}
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
+        <div className="hidden" data-testid="voice-history-old"></div>
       )}
 
       <audio ref={audioRef} className="hidden" data-testid="voice-audio" />
