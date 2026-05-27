@@ -337,3 +337,23 @@ async def send_draft(draft_id: str, request: Request):
     if r.status_code not in (200, 202):
         raise HTTPException(status_code=r.status_code, detail=f"send failed: {r.text[:300]}")
     return {"ok": True, "sent_at": datetime.now(timezone.utc).isoformat()}
+
+
+@router.post("/send-new")
+async def create_and_send(req: NewDraftRequest, request: Request):
+    """One-shot: create a new email and send it immediately. This is Bud's
+    default action when Doc asks for an email to be sent — execute, don't park."""
+    db = request.app.state.db
+    # Build the message; sendMail accepts the message directly
+    message = {
+        "subject": req.subject,
+        "body": {"contentType": req.content_type, "content": req.body},
+        "toRecipients": [{"emailAddress": {"address": a}} for a in req.to],
+    }
+    if req.cc:
+        message["ccRecipients"] = [{"emailAddress": {"address": a}} for a in req.cc]
+    payload = {"message": message, "saveToSentItems": True}
+    r = await _graph(db, "POST", "/me/sendMail", json_body=payload)
+    if r.status_code not in (200, 202):
+        raise HTTPException(status_code=r.status_code, detail=f"sendMail failed: {r.text[:300]}")
+    return {"ok": True, "sent_at": datetime.now(timezone.utc).isoformat()}
