@@ -47,6 +47,8 @@ export default function VoicePanel({ showToast }) {
   const rafRef = useRef(null);
   const audioRef = useRef(null);
   const lastAudioUrlRef = useRef(null);
+  const playbackCtxRef = useRef(null);
+  const currentSourceRef = useRef(null);
 
   // Speech-state refs (avoid stale closures from RAF)
   const startedAtRef = useRef(0);
