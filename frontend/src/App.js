@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import "@/App.css";
 import axios from "axios";
 import VoicePanel from "./VoicePanel";
@@ -122,6 +122,8 @@ function App() {
   const [briefing, setBriefing] = useState(null);
   const [briefingStatus, setBriefingStatus] = useState(null);
   const [briefingBusy, setBriefingBusy] = useState(false);
+  const lastInboundIdRef = useRef(null);
+  const lastInboundInitRef = useRef(false);
   const [sendOpen, setSendOpen] = useState(false);
   const [sendTo, setSendTo] = useState("");
   const [sendCc, setSendCc] = useState("");
@@ -194,7 +196,7 @@ function App() {
     // Auto-fill base URL from frontend env if config doesn't have one yet
     if (!baseUrlInput && BACKEND_URL) setBaseUrlInput(BACKEND_URL);
     refresh();
-    const t = setInterval(refresh, 15000);
+    const t = setInterval(refresh, 8000);
     return () => clearInterval(t);
   }, []); // eslint-disable-line
 
@@ -1043,7 +1045,12 @@ function App() {
 
           <Section
             title="Mailroom"
-            kicker={`LETTERS · ${letters.length}`}
+            kicker={(() => {
+              const unread = letters.filter((l) => l.direction === "inbound" && !l.read).length;
+              const ogRound = Math.max(0, ...letters.filter((l) => l.from_agent === "og" || l.to_agent === "og").map((l) => l.round || 0));
+              const nineRound = Math.max(0, ...letters.filter((l) => l.from_agent === "nine" || l.to_agent === "nine").map((l) => l.round || 0));
+              return `LETTERS · ${letters.length} · OG R${ogRound} · 9 R${nineRound}${unread ? ` · ${unread} UNREAD` : ""}`;
+            })()}
             right={
               <button
                 onClick={() => setComposeOpen((v) => !v)}
