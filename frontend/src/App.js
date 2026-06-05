@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import "@/App.css";
 import axios from "axios";
 import VoicePanel from "./VoicePanel";
+import VoiceRealtimePanel from "./VoiceRealtimePanel";
 import {
   Hammer,
   Mail,
@@ -526,7 +527,7 @@ function App() {
       <main className="max-w-6xl mx-auto px-6 py-8 grid grid-cols-1 lg:grid-cols-3 gap-6 stagger">
         {/* LEFT — Identity / inbox creds */}
         <div className="lg:col-span-2 space-y-6">
-          <VoicePanel showToast={showToast} />
+          <VoiceRealtimePanel showToast={showToast} />
           <Section
             title="Daily Briefing"
             kicker={

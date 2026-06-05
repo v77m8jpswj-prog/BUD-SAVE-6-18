@@ -19,6 +19,7 @@ from outlook import router as outlook_router
 from bud_assets import router as bud_assets_router
 from briefing import router as briefing_router, scheduled_briefing_job
 from voice import router as voice_router
+from voice_rt import router as voice_rt_router
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -94,6 +95,7 @@ app.include_router(outlook_router)
 app.include_router(bud_assets_router)
 app.include_router(briefing_router)
 app.include_router(voice_router)
+app.include_router(voice_rt_router)
 
 app.add_middleware(
     CORSMiddleware,
