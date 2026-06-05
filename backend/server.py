@@ -135,6 +135,44 @@ async def startup_scheduler():
         replace_existing=True,
         misfire_grace_time=600,
     )
+
+    # Nightly brain mirror sync at 3 AM CT
+    async def brain_resync(db_ref):
+        import os, httpx
+        token = os.environ.get("BUD_BRAIN_BEARER")
+        base = os.environ.get("BRAIN_BASE")
+        if not token or not base:
+            return
+        shop = "drunderhood-fortsmith"
+        h = {"Authorization": f"Bearer {token}"}
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as c:
+                s = await c.get(f"{base}/api/brain/stats?shop_id={shop}", headers=h)
+                ro = await c.get(f"{base}/api/brain/recent-outcomes?shop_id={shop}&limit=200", headers=h)
+            if ro.status_code == 200:
+                events = ro.json().get("events", [])
+                if events:
+                    await db_ref["brain_mirror_outcomes"].delete_many({})
+                    await db_ref["brain_mirror_outcomes"].insert_many(events)
+            if s.status_code == 200:
+                from datetime import datetime, timezone as _tz
+                stats_doc = s.json()
+                stats_doc["mirrored_at"] = datetime.now(_tz.utc).isoformat()
+                await db_ref["brain_mirror_stats"].update_one(
+                    {"shop_id": shop}, {"$set": stats_doc}, upsert=True
+                )
+            logger.info("brain resync complete")
+        except Exception as e:
+            logger.exception("brain resync failed: %s", e)
+
+    scheduler.add_job(
+        brain_resync,
+        CronTrigger(hour=3, minute=0, timezone=tz_timezone(tz_name)),
+        kwargs={"db_ref": db},
+        id="brain_resync",
+        replace_existing=True,
+        misfire_grace_time=600,
+    )
     scheduler.start()
     app.state.scheduler = scheduler
     logger.info("daily briefing scheduled @ %02d:%02d %s", hour, minute, tz_name)
