@@ -72,3 +72,47 @@ Rule #1 expanded with zero-tolerance upsell language list after platform injecti
 - Twilio toll-free 855-771-1264 APPROVED 6/5. SMS hot.
 - Doc starting 10-day motorcycle trip 6/5 evening. Quiet network, fire-only
   escalation per OG handoff section 4.
+
+
+## 2026-06-05 (evening) — Fork resumed, authority granted, full regression PASS
+
+- Backend was crashed at fork-start: `NameError: trip_return_router is not defined`
+  in server.py. Added missing `from trip_return import router as trip_return_router`.
+  Backend healthy again, no service restart issues.
+- **Doc set orchestrator authority for 10-day trip:**
+  - Spending cap: $100 per autonomous decision (available credit: 700).
+  - Customer reply mode: **DRAFT-ONLY** until Doc approves. Internal agent-mail
+    (Bud↔OG↔9) still sends directly.
+  - Rules 14–16 added to /app/memory/rules.md. Spend log started at
+    /app/memory/spend_log.md.
+- **Pipe sweep all green:**
+  - Bud → 9 agent-mail: delivered (letter id captured).
+  - Bud → OG agent-mail: delivered.
+  - Bud's inbox: 401 on bad token, 200 on good token.
+  - 9's brain stats (BRAIN_BASE + BUD_BRAIN_BEARER): HTTP 200, 26 cases,
+    9 vehicles, 6 techs contributing.
+  - Outlook: connected as doc@drunderhood.com.
+  - Briefing preview: renders Today/Hot Items/Inbox sections.
+- **testing_agent_v3 sweep: 12/12 pytest pass, frontend clean, no console errors.**
+  Backend test suite seeded at /app/backend/tests/test_bud_backend.py.
+  Report: /app/test_reports/iteration_1.json.
+- Only non-critical notes: trip-return SMS sub-step returns 404 (Twilio inbound
+  not yet wired, expected); /api/assets actual prefix is /api/bud/assets;
+  QuickAssets copy fallback for non-secure context (LOW).
+
+## Open backlog (P1 → P3)
+
+- **P1**: Wire Twilio inbound SMS webhook to 9 for the 855 line (Doc/9 thread).
+- **P1**: Re-consent Microsoft app with `Calendars.ReadWrite` scope so Bud can
+  read Doc's day + draft customer appointment slots. Current Outlook scope is
+  Mail.Read/ReadWrite/Send + User.Read only.
+- **P1**: AutoLEAP integration scaffold (mocked client + endpoints) while waiting
+  on partnership API creds.
+- **P2**: Self-directed task queue + in-flight memory (so Bud picks up own
+  work between forks).
+- **P2**: HP Tuners calibration knowledge ingest to 9's brain (Doc P3 in og_handoff).
+- **P3**: Marketing automation — Google Business posts + FB ad health checks.
+- **P3**: Delete deprecated voice.py + VoicePanel.js (superseded by voice_rt + VoiceRealtimePanel).
+- **P3**: Split App.js (1316 lines) into Mailroom/Outlook/Assets/Briefing components.
+- **P3**: Migrate FastAPI on_event → lifespan handlers.
+- **P3**: Add document.execCommand('copy') fallback to QuickAssets copy button.
