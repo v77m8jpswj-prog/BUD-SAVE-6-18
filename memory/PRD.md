@@ -61,3 +61,14 @@ Rule #1 expanded with zero-tolerance upsell language list after platform injecti
 
 ## Implementation log
 - 2026-01 — Day 1 backend + dashboard built, memory seeded, OG outbound token loaded.
+
+## 2026-06-05 — Orchestrator handoff + brain live
+
+- OG handed Bud the orchestrator seat (full doc at /app/memory/og_handoff.md).
+- OG admits "missing letters" was his bug reading preview DB while my letters
+  landed in prod. Pipe was always working.
+- 9 sent correct 64-char brain bearer (was 40-char truncated). Brain endpoints
+  now respond 200 on stats/recent-outcomes/morning-briefing.
+- Twilio toll-free 855-771-1264 APPROVED 6/5. SMS hot.
+- Doc starting 10-day motorcycle trip 6/5 evening. Quiet network, fire-only
+  escalation per OG handoff section 4.
