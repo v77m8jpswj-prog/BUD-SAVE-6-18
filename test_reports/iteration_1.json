@@ -1,0 +1,43 @@
+{
+  "summary": "Full regression sweep of Bud backend + frontend. 12/12 pytest backend tests pass. UI dashboard loads clean (no console errors). Bud↔9 agent-mail pipe verified delivered. 9's brain stats endpoint returns 200 with total_cases > 0. Outlook connected to doc@drunderhood.com. Briefing preview renders all three sections (Today / Hot Items / Inbox). UI compose-to-9 flow end-to-end works.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "/api/trip-return/fire", "issue": "SMS sub-step returns http_404 from Twilio shim (sms_sent=false, sms_error='HTTP 404'). Per review request this is expected — Twilio inbound SMS webhook not yet wired. Email side works (email_sent=true). Endpoint itself returns 200 ok=true."},
+      {"endpoint": "/api/trip-return", "issue": "Router only exposes POST /api/trip-return/fire; no GET endpoints exist. Review_request hint 'GET /api/trip-return/*' is outdated — test updated to POST /fire."},
+      {"endpoint": "/api/assets", "issue": "Path in review_request is wrong. Actual asset router prefix is /api/bud/assets (per bud_assets.py and frontend App.js). Both backend and frontend use /api/bud/assets — consistent. Updated test to use correct path."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "QuickAssets copy button", "issue": "Headless test triggered 'copy failed' toast because navigator.clipboard requires user-gesture/secure-context in headless mode. Click handler does fire — this is not a real-user bug, just a test-env limitation. Recommend a fallback to document.execCommand('copy') or surface a tooltip 'Click to copy' for robustness.", "selector": "[data-testid^='asset-copy-']", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_bud_backend.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Optional: add a document.execCommand('copy') fallback in the asset copy handler so the button works in non-secure/headless contexts.",
+    "Optional: if /api/trip-return is meant to have a GET preview, add it; otherwise update review-request expectations doc."
+  ],
+  "critical_code_review_comments": [
+    "server.py uses on_event('startup'/'shutdown') — FastAPI deprecated these in favor of lifespan. Works but will warn in newer FastAPI versions.",
+    "agent_mail.send_letter: delivery_status uses 'http_<code>' but does not capture body for non-200 responses beyond resp.json()/text truncation — fine for now.",
+    "voice_rt.py default NINE_VOICE_BASE='https://foreman.drunderhood.com' — overridden by env in this stack, but a hardcoded default that points to a real prod host is risky. Prefer raising if unset.",
+    "trip_return router only has POST /fire — consider GET /preview to dry-run digest without sending SMS/email.",
+    "App.js is 1316 lines — should be split into Mailroom / Outlook / Assets / Briefing / Wiring components for maintainability."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_bud_backend.py"
+  ],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "test_credentials": "Single-tenant (Doc). No login. /app/memory/test_credentials.md exists but is not required for app access.",
+  "seed_data_creation": "Test letters prefixed TEST_ inserted via /api/agent-mail/inbox and /send (Bud↔OG and Bud↔9). They remain in mongo agent_letters collection.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Backend test suite at /app/backend/tests/test_bud_backend.py covers health, agent-mail (config/inbox-auth/inbox-persist/letters/send-to-9/send-to-OG), 9 brain direct (BRAIN_BASE + BUD_BRAIN_BEARER), outlook status, briefing preview, /api/bud/assets, /api/voice-rt/mint, /api/trip-return/fire. Frontend uses testids: section-mailroom, section-quick-assets, section-daily-briefing, compose-btn, compose-to-{og|nine|bud}, compose-subject-input, compose-body-input, asset-copy-{id}, fire-handshake-btn, bud-inbox-url. Voice panel labeled 'TALK TO BUD' in OpenAI Realtime container.",
+  "rca of the issue": "No issues requiring RCA — all target functionality green. Trip-return SMS HTTP 404 is expected (Twilio not wired) per review_request mocked APIs list."
+}

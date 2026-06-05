@@ -20,6 +20,7 @@ from bud_assets import router as bud_assets_router
 from briefing import router as briefing_router, scheduled_briefing_job
 from voice import router as voice_router
 from voice_rt import router as voice_rt_router
+from trip_return import router as trip_return_router
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
