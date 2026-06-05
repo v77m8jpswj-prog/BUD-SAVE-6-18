@@ -96,6 +96,7 @@ app.include_router(bud_assets_router)
 app.include_router(briefing_router)
 app.include_router(voice_router)
 app.include_router(voice_rt_router)
+app.include_router(trip_return_router)
 
 app.add_middleware(
     CORSMiddleware,
@@ -172,6 +173,24 @@ async def startup_scheduler():
         id="brain_resync",
         replace_existing=True,
         misfire_grace_time=600,
+    )
+
+    # Trip return digest — fires once on 6/15 at 7 AM CT (Doc's return morning)
+    from trip_return import fire_trip_return as _ftr_handler
+    async def _trip_return_job():
+        import httpx
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as c:
+                await c.post("http://localhost:8001/api/trip-return/fire")
+        except Exception as e:
+            logger.exception("trip return digest failed: %s", e)
+
+    scheduler.add_job(
+        _trip_return_job,
+        CronTrigger(year=2026, month=6, day=15, hour=7, minute=0, timezone=tz_timezone(tz_name)),
+        id="trip_return_digest",
+        replace_existing=True,
+        misfire_grace_time=3600,
     )
     scheduler.start()
     app.state.scheduler = scheduler
