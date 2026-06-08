@@ -74,6 +74,12 @@ Rule #1 expanded with zero-tolerance upsell language list after platform injecti
   escalation per OG handoff section 4.
 
 
+## 2026-06-08 — AutoLEAP parked
+
+- Doc relayed AutoLEAP still has nothing for us ("they don't have it yet").
+- P1 AutoLEAP scaffold moved to **BLOCKED — no ETA from vendor.**
+- Will revisit on Doc's signal.
+
 ## 2026-06-08 — Bud↔9 brain fully wired
 
 - 9's preview stack went dark on /api/brain/*; switched BRAIN_BASE in backend/.env
