@@ -72,6 +72,30 @@ async def cases(shop_id: str = DEFAULT_SHOP, limit: int = 50, skip: int = 0) -> 
     return r.json()
 
 
+async def operator_profile(
+    shop_id: str = DEFAULT_SHOP,
+    chat_limit: int = 200,
+    voice_limit: int = 50,
+    cases_limit: int = 20,
+) -> dict:
+    """Pull Doc's full identity payload (shop, operator_style, locked facts, recent
+    chat/voice/cases). 9 ships this on PREVIEW first; PROD follows on Doc's next deploy."""
+    base, token = _cfg()
+    async with httpx.AsyncClient(timeout=30.0) as c:
+        r = await c.get(
+            f"{base}/api/brain/operator-profile",
+            params={
+                "shop_id": shop_id,
+                "chat_limit": chat_limit,
+                "voice_limit": voice_limit,
+                "cases_limit": cases_limit,
+            },
+            headers=_h(token),
+        )
+    r.raise_for_status()
+    return r.json()
+
+
 async def post_morning_briefing(
     shop_id: str,
     body_md: str,

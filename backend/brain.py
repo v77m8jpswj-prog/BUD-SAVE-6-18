@@ -48,6 +48,30 @@ async def brain_sync_now(request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/operator-profile")
+async def operator_profile_proxy(request: Request, refresh: bool = False):
+    """Cached pass-through to 9's operator-profile. Cached doc lives in mongo so
+    Bud can build persona prompts even if 9 is briefly unreachable."""
+    db = request.app.state.db
+    if not refresh:
+        cached = await db["brain_operator_profile"].find_one({"shop_id": SHOP}, {"_id": 0})
+        if cached:
+            return {"source": "cache", "profile": cached}
+    try:
+        profile = await brain_client.operator_profile(SHOP)
+    except Exception as e:
+        cached = await db["brain_operator_profile"].find_one({"shop_id": SHOP}, {"_id": 0})
+        if cached:
+            return {"source": "cache_after_error", "error": str(e), "profile": cached}
+        raise HTTPException(status_code=502, detail=f"operator-profile fetch failed: {e}")
+    profile["shop_id"] = SHOP
+    profile["cached_at"] = profile.get("generated_at")
+    await db["brain_operator_profile"].update_one(
+        {"shop_id": SHOP}, {"$set": profile}, upsert=True
+    )
+    return {"source": "live", "profile": profile}
+
+
 @router.get("/cases-mirror")
 async def cases_mirror(
     request: Request,

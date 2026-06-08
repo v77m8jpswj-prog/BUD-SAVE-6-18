@@ -298,11 +298,50 @@ async def _email_briefing(db, body_md: str) -> dict:
 
 # ---------- Core generator ----------
 
+async def _operator_overlay(db) -> str:
+    """Pull 9's operator-profile (cached). Returns a short overlay block the LLM
+    appends to its system prompt so briefings sound like Doc, not a generic LLM."""
+    cached = await db["brain_operator_profile"].find_one({"shop_id": "drunderhood-fortsmith"}, {"_id": 0})
+    if not cached:
+        try:
+            import brain_client as _bc
+            cached = await _bc.operator_profile()
+            cached["shop_id"] = "drunderhood-fortsmith"
+            await db["brain_operator_profile"].update_one(
+                {"shop_id": "drunderhood-fortsmith"}, {"$set": cached}, upsert=True
+            )
+        except Exception as e:
+            logger.warning("operator_profile fetch failed: %s", e)
+            return ""
+    style = (cached.get("operator_style") or "").strip()
+    facts = cached.get("locked_memory_facts") or []
+    if not style and not facts:
+        return ""
+    lines = ["\n--- DOC OPERATOR OVERLAY (from 9's brain) ---"]
+    if style:
+        lines.append("OPERATOR STYLE:")
+        lines.append(style)
+    if facts:
+        lines.append("\nLOCKED FACTS (never contradict these — they ARE Doc):")
+        # dedupe + clip to keep prompt size sane
+        seen = set()
+        for f in facts[:25]:
+            t = str(f).strip()
+            if t and t not in seen:
+                seen.add(t)
+                lines.append(f"- {t}")
+    lines.append("--- END OVERLAY ---\n")
+    return "\n".join(lines)
+
+
 async def generate_briefing(db, *, email: bool) -> dict:
     inbox = await _collect_inbox_summary(db, hours=24)
     letters = await _collect_agent_letters(db, hours=24)
     brain = await _collect_brain_snapshot(db)
+    overlay = await _operator_overlay(db)
     source = _format_data_for_llm(inbox, letters, brain)
+    if overlay:
+        source = overlay + "\n" + source
     body_md = await _call_llm(source)
     sent_status = {"sent": False}
     if email:
@@ -313,6 +352,7 @@ async def generate_briefing(db, *, email: bool) -> dict:
         "inbox_count": len(inbox),
         "letters_count": len(letters),
         "brain_connected": brain.get("connected", False),
+        "operator_overlay_loaded": bool(overlay),
         **sent_status,
     }
 
