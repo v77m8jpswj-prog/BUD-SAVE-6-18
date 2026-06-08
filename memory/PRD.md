@@ -74,6 +74,53 @@ Rule #1 expanded with zero-tolerance upsell language list after platform injecti
   escalation per OG handoff section 4.
 
 
+## 2026-06-08 (late) — Three modules shipped: tasks, SMS relay, email-to-brain
+
+Per Doc's "D" pick (build all three of: BRAIN: parser, Twilio inbound, task queue):
+
+**Self-directed task queue (`/app/backend/tasks.py`):**
+- `POST/GET/PATCH/DELETE /api/tasks` CRUD with todo/doing/blocked/done states + P0-P3.
+- `bud_tasks` mongo collection. Survives fork starts.
+- `create_task_if_new(source, source_ref, ...)` helper for idempotent auto-creation.
+- Dashboard panel `Task Queue` with inline add, status toggle, mark-done, delete buttons.
+  data-testids: task-create-row, task-new-input, task-add-btn, task-list, task-item-{id},
+  task-status-btn-{id}, task-done-btn-{id}, task-delete-btn-{id}, task-list-empty.
+
+**Twilio inbound SMS relay (`/app/backend/sms.py`):**
+- `POST /api/sms/inbound` accepts Twilio native form-encoded OR JSON forwarded by 9.
+- Shared-secret auth via `X-Sms-Shared-Secret` header (env var `SMS_INBOUND_SECRET`).
+- Generated SMS_INBOUND_SECRET added to backend/.env.
+- Pulls cached operator-profile + locked Doc facts → gpt-5.2 → SMS-sized reply (≤320 chars,
+  "— Doc" sign-off, ALL CAPS, one-question-at-a-time per Doc rules).
+- Persists to `sms_inbound`, saves draft to `bud_assets` (kind=sms-draft), auto-creates a P1
+  task ("Review SMS reply → <phone>") via tasks.create_task_if_new.
+- `GET /api/sms/inbound`, `POST /api/sms/inbound/mark-sent`, `GET /api/sms/config`.
+- Dashboard panel `Inbound SMS` with copy/mark-sent buttons.
+  data-testids: sms-list, sms-empty, sms-item-{id}, sms-copy-btn-{id}, sms-mark-sent-btn-{id}.
+- DRAFT-ONLY per rule 15 — Bud never auto-sends customer SMS.
+
+**Email-to-Brain ingest (`/app/backend/brain_ingest.py`):**
+- 15-min scheduler job scans Outlook inbox for `BRAIN:` subject prefix (client-side filter —
+  Graph $filter on startswith returned InefficientFilter, fixed).
+- Best-effort regex parse: VIN (17-char), DTCs (P/B/C/U+4hex), year, make (25 common makes),
+  outcome heuristic (PASS/FAIL/PARTIAL).
+- Queues to `brain_ingest_queue` (state: queued|posted|failed).
+- Flush is a no-op until 9 ships `POST /api/brain/cases`. Toggle via
+  `POST /api/brain/ingest/endpoint-live {"enabled":true}`.
+- Dashboard panel `Email → Brain` with manual scan button, queue counts, status badges.
+  data-testids: ingest-howto, ingest-list, ingest-empty, ingest-scan-btn.
+
+**Comms:** R6.1 to 9 — full SMS endpoint payload + 3 case-write spec questions
+(payload shape, idempotency strategy, error semantics). Delivered (bud_id `839d16a6-...`,
+9_id `c49e4335-...`).
+
+**Verified end-to-end:**
+- POST /api/sms/inbound → draft "WHAT ENGINE IN THAT '18 TAHOE—5.3 OR 6.2, AND YOU WANT
+  FULL SYNTHETIC OR BLEND? — Doc" (nailed Doc voice).
+- POST /api/tasks → created P1 self task.
+- POST /api/brain/ingest/scan → 0 BRAIN: emails (none in inbox yet, expected).
+- Dashboard renders all three panels, zero console errors.
+
 ## 2026-06-08 — AutoLEAP parked
 
 - Doc relayed AutoLEAP still has nothing for us ("they don't have it yet").

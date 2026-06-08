@@ -22,6 +22,9 @@ from voice import router as voice_router
 from voice_rt import router as voice_rt_router
 from trip_return import router as trip_return_router
 from brain import router as brain_router
+from brain_ingest import router as brain_ingest_router, scan_brain_emails, flush_queue
+from sms import router as sms_router
+from tasks import router as tasks_router
 import brain_client
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -101,6 +104,9 @@ app.include_router(voice_router)
 app.include_router(voice_rt_router)
 app.include_router(trip_return_router)
 app.include_router(brain_router)
+app.include_router(brain_ingest_router)
+app.include_router(sms_router)
+app.include_router(tasks_router)
 
 app.add_middleware(
     CORSMiddleware,
@@ -156,6 +162,23 @@ async def startup_scheduler():
         id="brain_resync",
         replace_existing=True,
         misfire_grace_time=600,
+    )
+
+    # Brain email-ingest scanner — every 15 min, plus a flush attempt
+    async def _brain_ingest_tick():
+        try:
+            await scan_brain_emails(db)
+            await flush_queue(db)
+        except Exception as e:
+            logger.exception("brain ingest tick failed: %s", e)
+
+    from apscheduler.triggers.interval import IntervalTrigger
+    scheduler.add_job(
+        _brain_ingest_tick,
+        IntervalTrigger(minutes=15),
+        id="brain_ingest_tick",
+        replace_existing=True,
+        misfire_grace_time=300,
     )
 
     # Trip return digest — fires once on 6/15 at 7 AM CT (Doc's return morning)

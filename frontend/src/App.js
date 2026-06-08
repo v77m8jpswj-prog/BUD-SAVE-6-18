@@ -29,6 +29,9 @@ import {
   Volume2,
   Trash2,
   Loader2,
+  Brain,
+  ListChecks,
+  MessageSquare,
 } from "lucide-react";
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
@@ -125,6 +128,10 @@ function App() {
   const [briefingBusy, setBriefingBusy] = useState(false);
   const [brain, setBrain] = useState(null);
   const [brainBusy, setBrainBusy] = useState(false);
+  const [tasks, setTasks] = useState({ tasks: [], counts: {} });
+  const [newTaskTitle, setNewTaskTitle] = useState("");
+  const [smsInbound, setSmsInbound] = useState([]);
+  const [ingestQueue, setIngestQueue] = useState(null);
   const lastInboundIdRef = useRef(null);
   const lastInboundInitRef = useRef(false);
   const [sendOpen, setSendOpen] = useState(false);
@@ -140,7 +147,7 @@ function App() {
 
   const refresh = useCallback(async () => {
     try {
-      const [h, c, l, o, a, bL, bS, br] = await Promise.all([
+      const [h, c, l, o, a, bL, bS, br, tk, sm, ig] = await Promise.all([
         axios.get(`${API}/health`),
         axios.get(`${API}/agent-mail/config`),
         axios.get(`${API}/agent-mail/letters?limit=100`),
@@ -149,6 +156,9 @@ function App() {
         axios.get(`${API}/briefing/latest`),
         axios.get(`${API}/briefing/status`),
         axios.get(`${API}/brain/status`),
+        axios.get(`${API}/tasks?limit=50`),
+        axios.get(`${API}/sms/inbound?limit=20`),
+        axios.get(`${API}/brain/ingest/queue`),
       ]);
       setHealth(h.data);
       setConfig(c.data);
@@ -158,6 +168,9 @@ function App() {
       setBriefing(bL.data.empty ? null : bL.data);
       setBriefingStatus(bS.data);
       setBrain(br.data);
+      setTasks(tk.data || { tasks: [], counts: {} });
+      setSmsInbound(sm.data?.messages || []);
+      setIngestQueue(ig.data);
       if (!baseUrlInput && c.data.bud_base_url) setBaseUrlInput(c.data.bud_base_url);
     } catch (e) {
       console.error("refresh failed", e);
@@ -216,6 +229,46 @@ function App() {
       showToast("brain sync failed", "err");
     } finally {
       setBrainBusy(false);
+    }
+  };
+
+  const createTask = async () => {
+    const title = newTaskTitle.trim();
+    if (!title) return;
+    try {
+      await axios.post(`${API}/tasks`, { title, priority: "P2", source: "manual" });
+      setNewTaskTitle("");
+      refresh();
+    } catch (e) {
+      showToast("task create failed", "err");
+    }
+  };
+
+  const setTaskStatus = async (taskId, status) => {
+    try {
+      await axios.patch(`${API}/tasks/${taskId}`, { status });
+      refresh();
+    } catch (e) {
+      showToast("task update failed", "err");
+    }
+  };
+
+  const deleteTask = async (taskId) => {
+    try {
+      await axios.delete(`${API}/tasks/${taskId}`);
+      refresh();
+    } catch (e) {
+      showToast("task delete failed", "err");
+    }
+  };
+
+  const scanIngest = async () => {
+    try {
+      const r = await axios.post(`${API}/brain/ingest/scan`);
+      showToast(`scan — ${r.data?.queued ?? 0} new BRAIN: queued`);
+      refresh();
+    } catch (e) {
+      showToast("scan failed", "err");
     }
   };
 
@@ -604,6 +657,178 @@ function App() {
                     last ingest: {brain.live?.last_ingest_at ? new Date(brain.live.last_ingest_at).toLocaleString() : "—"}
                   </div>
                 </div>
+              </div>
+            )}
+          </Section>
+
+          <Section
+            title="Task Queue"
+            kicker={`SELF-DIRECTED · ${tasks.counts?.todo ?? 0} TODO · ${tasks.counts?.doing ?? 0} DOING · ${tasks.counts?.blocked ?? 0} BLOCKED`}
+          >
+            <div className="flex gap-2 mb-3" data-testid="task-create-row">
+              <input
+                value={newTaskTitle}
+                onChange={(e) => setNewTaskTitle(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") createTask(); }}
+                placeholder="new task — what needs doing?"
+                className="bud-input flex-1 px-3 py-2 text-sm rounded"
+                data-testid="task-new-input"
+              />
+              <button
+                onClick={createTask}
+                disabled={!newTaskTitle.trim()}
+                className="bud-btn-primary px-4 py-2 rounded text-sm"
+                data-testid="task-add-btn"
+              >
+                add
+              </button>
+            </div>
+            {tasks.tasks?.length ? (
+              <div className="space-y-2 max-h-[320px] overflow-auto pr-1" data-testid="task-list">
+                {tasks.tasks.filter((t) => t.status !== "done").slice(0, 12).map((t) => (
+                  <div
+                    key={t.id}
+                    className="bud-card-inset p-3 flex items-start gap-3"
+                    data-testid={`task-item-${t.id}`}
+                  >
+                    <button
+                      onClick={() => setTaskStatus(t.id, t.status === "doing" ? "todo" : "doing")}
+                      className={`bud-pill text-[10px] px-2 py-1 rounded ${t.status === "doing" ? "bud-pill-amber" : ""}`}
+                      data-testid={`task-status-btn-${t.id}`}
+                      title="toggle todo/doing"
+                    >
+                      {t.status}
+                    </button>
+                    <span className="bud-pill text-[10px] px-2 py-1 rounded">{t.priority}</span>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm text-[var(--bud-text)] break-words">{t.title}</div>
+                      {t.notes && (
+                        <div className="text-[11px] text-[var(--bud-muted)] mt-1 line-clamp-2">{t.notes}</div>
+                      )}
+                      <div className="text-[10px] text-[var(--bud-muted)] mt-1">
+                        {t.source}{t.source_ref ? ` · ${t.source_ref.slice(0, 8)}` : ""}
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => setTaskStatus(t.id, "done")}
+                      className="bud-btn-ghost px-2 py-1 rounded text-xs"
+                      data-testid={`task-done-btn-${t.id}`}
+                      title="mark done"
+                    >
+                      ✓
+                    </button>
+                    <button
+                      onClick={() => deleteTask(t.id)}
+                      className="bud-btn-ghost px-2 py-1 rounded text-xs text-[var(--bud-muted)]"
+                      data-testid={`task-delete-btn-${t.id}`}
+                      title="delete"
+                    >
+                      <Trash2 size={12} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="bud-card-inset p-4 text-xs text-[var(--bud-muted)]" data-testid="task-list-empty">
+                queue empty — add a task or wait for inbound to populate.
+              </div>
+            )}
+          </Section>
+
+          <Section
+            title="Inbound SMS"
+            kicker={`+1 855 771 1264 · DRAFT-ONLY · ${smsInbound.length} RECENT`}
+          >
+            {smsInbound.length === 0 ? (
+              <div className="bud-card-inset p-4 text-xs text-[var(--bud-muted)]" data-testid="sms-empty">
+                no inbound texts yet. once 9 forwards Twilio webhooks here,
+                customer messages auto-draft a Doc-voice reply (saved to Quick Assets).
+              </div>
+            ) : (
+              <div className="space-y-3 max-h-[360px] overflow-auto pr-1" data-testid="sms-list">
+                {smsInbound.slice(0, 8).map((m) => (
+                  <div key={m.id} className="bud-card-inset p-3" data-testid={`sms-item-${m.id}`}>
+                    <div className="flex items-center justify-between text-[10px] text-[var(--bud-muted)] mb-1">
+                      <span>{m.from_phone}</span>
+                      <span>{m.received_at ? new Date(m.received_at).toLocaleString() : ""}</span>
+                    </div>
+                    <div className="text-sm text-[var(--bud-text)] mb-2 whitespace-pre-wrap break-words">
+                      {m.body}
+                    </div>
+                    <div className="text-[10px] tracking-[0.25em] text-[var(--bud-muted)] mb-1">DRAFT</div>
+                    <div className="text-sm text-[var(--bud-amber)] whitespace-pre-wrap break-words font-mono">
+                      {m.draft_reply}
+                    </div>
+                    <div className="flex items-center gap-2 mt-2">
+                      <button
+                        onClick={() => { navigator.clipboard.writeText(m.draft_reply || ""); showToast("draft copied"); }}
+                        className="bud-btn-ghost px-3 py-1 rounded text-xs"
+                        data-testid={`sms-copy-btn-${m.id}`}
+                      >
+                        copy
+                      </button>
+                      {m.draft_sent ? (
+                        <span className="bud-pill bud-pill-amber text-[10px] px-2 py-1 rounded">sent</span>
+                      ) : (
+                        <button
+                          onClick={async () => { await axios.post(`${API}/sms/inbound/mark-sent`, { sms_id: m.id }); showToast("marked sent"); refresh(); }}
+                          className="bud-btn-ghost px-3 py-1 rounded text-xs"
+                          data-testid={`sms-mark-sent-btn-${m.id}`}
+                        >
+                          mark sent
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </Section>
+
+          <Section
+            title="Email → Brain"
+            kicker={
+              ingestQueue
+                ? `Q ${ingestQueue.counts?.queued ?? 0} · POSTED ${ingestQueue.counts?.posted ?? 0} · FAIL ${ingestQueue.counts?.failed ?? 0} · endpoint ${ingestQueue.endpoint_live ? "LIVE" : "PENDING"}`
+                : "loading…"
+            }
+            right={
+              <button
+                onClick={scanIngest}
+                className="bud-btn-ghost px-3 py-2 rounded text-sm inline-flex items-center gap-2"
+                data-testid="ingest-scan-btn"
+                title="scan inbox for BRAIN: emails now"
+              >
+                <RefreshCw size={14} /> scan
+              </button>
+            }
+          >
+            <div className="bud-card-inset p-3 text-xs text-[var(--bud-muted)] mb-3" data-testid="ingest-howto">
+              email yourself with subject prefix <span className="text-[var(--bud-amber)] font-mono">BRAIN:</span>{" "}
+              and Bud parses + queues for 9's case corpus. flips live the moment 9 ships POST /api/brain/cases.
+            </div>
+            {ingestQueue?.items?.length ? (
+              <div className="space-y-2 max-h-[260px] overflow-auto pr-1" data-testid="ingest-list">
+                {ingestQueue.items.slice(0, 8).map((it) => (
+                  <div key={it.id} className="bud-card-inset p-2 text-xs" data-testid={`ingest-item-${it.id}`}>
+                    <div className="flex items-center justify-between">
+                      <span className="bud-pill text-[10px] px-2 py-1 rounded">{it.status}</span>
+                      <span className="text-[10px] text-[var(--bud-muted)]">
+                        {it.received_at ? new Date(it.received_at).toLocaleString() : ""}
+                      </span>
+                    </div>
+                    <div className="text-[var(--bud-text)] mt-1 break-words">{it.title}</div>
+                    {it.dtc_codes?.length ? (
+                      <div className="text-[10px] text-[var(--bud-muted)] mt-1">
+                        DTC: {it.dtc_codes.join(", ")}
+                      </div>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="text-xs text-[var(--bud-muted)]" data-testid="ingest-empty">
+                queue empty. nothing to flush yet.
               </div>
             )}
           </Section>
