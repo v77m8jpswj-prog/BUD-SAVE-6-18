@@ -76,6 +76,12 @@ If nothing meaningful: "Nothing worth surfacing."
 Letters from OG (Live Assist) and 9 (WRENCH). Each agent gets a sub-bullet if
 they have new traffic, with subject + 1-line summary. If silent: "Silent."
 
+## Shop Brain
+Quick read on 9's brain corpus (cases, techs, recent outcomes). One line of
+metrics + 1-3 surgical case bullets if anything is in-flight (PENDING, FAIL,
+or in PARTIAL state). If brain is offline: "Brain offline." (one line).
+If no notable in-flight cases: skip the bullets, just the metrics line.
+
 ## Shop Board
 Open ROs, estimates awaiting customer approval, unpaid invoices.
 If AutoLEAP not yet wired: "AutoLEAP API still pending. Will surface here once access lands."
@@ -125,6 +131,34 @@ async def _collect_inbox_summary(db, hours: int = 24) -> list[dict]:
     return out
 
 
+async def _collect_brain_snapshot(db) -> dict:
+    """Pull a tight live snapshot from 9's brain for the briefing."""
+    import brain_client as _bc
+    out: dict = {"connected": False}
+    try:
+        s = await _bc.stats()
+        out.update({
+            "connected": True,
+            "total_cases": s.get("total_cases"),
+            "total_vehicles_seen": s.get("total_vehicles_seen"),
+            "technicians_contributing": s.get("technicians_contributing"),
+            "last_ingest_at": s.get("last_ingest_at"),
+            "top_makes": s.get("top_makes", [])[:4],
+        })
+    except Exception as e:
+        out["error"] = str(e)
+    try:
+        out["recent_outcomes"] = await _bc.recent_outcomes(limit=5)
+    except Exception:
+        out["recent_outcomes"] = []
+    try:
+        page = await _bc.cases(limit=5)
+        out["recent_cases"] = page.get("cases", []) if isinstance(page, dict) else []
+    except Exception:
+        out["recent_cases"] = []
+    return out
+
+
 async def _collect_agent_letters(db, hours: int = 24) -> list[dict]:
     since_iso = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
     cursor = (
@@ -136,7 +170,7 @@ async def _collect_agent_letters(db, hours: int = 24) -> list[dict]:
     return await cursor.to_list(length=20)
 
 
-def _format_data_for_llm(inbox: list[dict], letters: list[dict]) -> str:
+def _format_data_for_llm(inbox: list[dict], letters: list[dict], brain: dict) -> str:
     """Render gathered data as a structured text block the LLM will summarize."""
     lines: list[str] = []
     now_ct = datetime.now(timezone.utc)
@@ -167,6 +201,30 @@ def _format_data_for_llm(inbox: list[dict], letters: list[dict]) -> str:
             )
             if l.get("body"):
                 lines.append(f"    body: {l['body'][:300]}")
+    lines.append("")
+    lines.append("## SHOP BRAIN (9 / WRENCH)")
+    if not brain.get("connected"):
+        lines.append(f"[brain offline: {brain.get('error','unknown')}]")
+    else:
+        lines.append(
+            f"cases={brain.get('total_cases')} · vehicles={brain.get('total_vehicles_seen')} "
+            f"· techs={brain.get('technicians_contributing')} · last_ingest={brain.get('last_ingest_at')}"
+        )
+        rc = brain.get("recent_cases") or []
+        if rc:
+            lines.append(f"recent_cases ({len(rc)}):")
+            for c in rc:
+                v = c.get("vehicle") or {}
+                veh = f"{v.get('year','')} {v.get('make','')} {v.get('model','')}".strip()
+                lines.append(
+                    f"  - {veh or '?'} — {(c.get('symptom') or '')[:80]} "
+                    f"[{c.get('outcome','?')}, tech={c.get('technician_name','?')}]"
+                )
+        ro = brain.get("recent_outcomes") or []
+        if ro:
+            lines.append(f"recent_outcomes ({len(ro)}):")
+            for o in ro[:5]:
+                lines.append(f"  - {str(o)[:200]}")
     lines.append("")
     lines.append("## SHOP BOARD (AutoLEAP)")
     lines.append("[AutoLEAP API access pending]")
@@ -243,7 +301,8 @@ async def _email_briefing(db, body_md: str) -> dict:
 async def generate_briefing(db, *, email: bool) -> dict:
     inbox = await _collect_inbox_summary(db, hours=24)
     letters = await _collect_agent_letters(db, hours=24)
-    source = _format_data_for_llm(inbox, letters)
+    brain = await _collect_brain_snapshot(db)
+    source = _format_data_for_llm(inbox, letters, brain)
     body_md = await _call_llm(source)
     sent_status = {"sent": False}
     if email:
@@ -253,6 +312,7 @@ async def generate_briefing(db, *, email: bool) -> dict:
         "source_data": source,
         "inbox_count": len(inbox),
         "letters_count": len(letters),
+        "brain_connected": brain.get("connected", False),
         **sent_status,
     }
 

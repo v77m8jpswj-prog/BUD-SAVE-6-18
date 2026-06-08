@@ -123,6 +123,8 @@ function App() {
   const [briefing, setBriefing] = useState(null);
   const [briefingStatus, setBriefingStatus] = useState(null);
   const [briefingBusy, setBriefingBusy] = useState(false);
+  const [brain, setBrain] = useState(null);
+  const [brainBusy, setBrainBusy] = useState(false);
   const lastInboundIdRef = useRef(null);
   const lastInboundInitRef = useRef(false);
   const [sendOpen, setSendOpen] = useState(false);
@@ -138,7 +140,7 @@ function App() {
 
   const refresh = useCallback(async () => {
     try {
-      const [h, c, l, o, a, bL, bS] = await Promise.all([
+      const [h, c, l, o, a, bL, bS, br] = await Promise.all([
         axios.get(`${API}/health`),
         axios.get(`${API}/agent-mail/config`),
         axios.get(`${API}/agent-mail/letters?limit=100`),
@@ -146,6 +148,7 @@ function App() {
         axios.get(`${API}/bud/assets?limit=50`),
         axios.get(`${API}/briefing/latest`),
         axios.get(`${API}/briefing/status`),
+        axios.get(`${API}/brain/status`),
       ]);
       setHealth(h.data);
       setConfig(c.data);
@@ -154,6 +157,7 @@ function App() {
       setAssets(a.data.assets || []);
       setBriefing(bL.data.empty ? null : bL.data);
       setBriefingStatus(bS.data);
+      setBrain(br.data);
       if (!baseUrlInput && c.data.bud_base_url) setBaseUrlInput(c.data.bud_base_url);
     } catch (e) {
       console.error("refresh failed", e);
@@ -200,6 +204,20 @@ function App() {
     const t = setInterval(refresh, 8000);
     return () => clearInterval(t);
   }, []); // eslint-disable-line
+
+  const syncBrain = async () => {
+    setBrainBusy(true);
+    try {
+      const r = await axios.post(`${API}/brain/sync-now`);
+      const c = r.data?.cases?.mirrored ?? 0;
+      showToast(`brain synced — ${c} cases`);
+      refresh();
+    } catch (e) {
+      showToast("brain sync failed", "err");
+    } finally {
+      setBrainBusy(false);
+    }
+  };
 
   const saveConfig = async () => {
     setBusy(true);
@@ -528,6 +546,68 @@ function App() {
         {/* LEFT — Identity / inbox creds */}
         <div className="lg:col-span-2 space-y-6">
           <VoiceRealtimePanel showToast={showToast} />
+
+          <Section
+            title="Shop Brain"
+            kicker={
+              brain?.connected
+                ? `9 / WRENCH · ${brain.live?.shop_name || "—"} · ${brain.live?.total_cases ?? 0} CASES`
+                : `9 / WRENCH · ${brain?.error ? "OFFLINE" : "CONNECTING…"}`
+            }
+            right={
+              <button
+                onClick={syncBrain}
+                disabled={brainBusy}
+                className="bud-btn-ghost px-3 py-2 rounded text-sm inline-flex items-center gap-2"
+                data-testid="brain-sync-btn"
+                title="Pull fresh stats + cases from 9 into local mirror"
+              >
+                <RefreshCw size={14} className={brainBusy ? "animate-spin" : ""} /> sync
+              </button>
+            }
+          >
+            {!brain ? (
+              <div className="bud-card-inset p-4 text-xs text-[var(--bud-muted)]" data-testid="brain-loading">
+                loading…
+              </div>
+            ) : !brain.connected ? (
+              <div className="bud-card-inset p-4 text-xs" data-testid="brain-offline">
+                <div className="text-[var(--bud-text)] mb-1 font-semibold">Brain offline.</div>
+                <div className="text-[var(--bud-muted)]">{brain.error || "no response from 9"}</div>
+              </div>
+            ) : (
+              <div className="grid grid-cols-2 gap-3 text-xs" data-testid="brain-stats">
+                <div className="bud-card-inset p-3">
+                  <div className="text-[10px] tracking-[0.25em] text-[var(--bud-muted)]">CASES</div>
+                  <div className="bud-display text-2xl text-[var(--bud-amber)]" data-testid="brain-cases">
+                    {brain.live?.total_cases ?? "—"}
+                  </div>
+                  <div className="text-[10px] text-[var(--bud-muted)] mt-1">
+                    mirrored: {brain.mirror_cases_count}
+                  </div>
+                </div>
+                <div className="bud-card-inset p-3">
+                  <div className="text-[10px] tracking-[0.25em] text-[var(--bud-muted)]">VEHICLES</div>
+                  <div className="bud-display text-2xl text-[var(--bud-text)]">
+                    {brain.live?.total_vehicles_seen ?? "—"}
+                  </div>
+                  <div className="text-[10px] text-[var(--bud-muted)] mt-1">
+                    techs: {brain.live?.technicians_contributing ?? "—"}
+                  </div>
+                </div>
+                <div className="bud-card-inset p-3 col-span-2">
+                  <div className="text-[10px] tracking-[0.25em] text-[var(--bud-muted)] mb-1">TOP MAKES</div>
+                  <div className="text-[var(--bud-text)]">
+                    {(brain.live?.top_makes || []).join(" · ") || "—"}
+                  </div>
+                  <div className="text-[10px] text-[var(--bud-muted)] mt-2">
+                    last ingest: {brain.live?.last_ingest_at ? new Date(brain.live.last_ingest_at).toLocaleString() : "—"}
+                  </div>
+                </div>
+              </div>
+            )}
+          </Section>
+
           <Section
             title="Daily Briefing"
             kicker={

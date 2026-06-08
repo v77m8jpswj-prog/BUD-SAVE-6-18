@@ -21,6 +21,8 @@ from briefing import router as briefing_router, scheduled_briefing_job
 from voice import router as voice_router
 from voice_rt import router as voice_rt_router
 from trip_return import router as trip_return_router
+from brain import router as brain_router
+import brain_client
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -98,6 +100,7 @@ app.include_router(briefing_router)
 app.include_router(voice_router)
 app.include_router(voice_rt_router)
 app.include_router(trip_return_router)
+app.include_router(brain_router)
 
 app.add_middleware(
     CORSMiddleware,
@@ -140,30 +143,9 @@ async def startup_scheduler():
 
     # Nightly brain mirror sync at 3 AM CT
     async def brain_resync(db_ref):
-        import os, httpx
-        token = os.environ.get("BUD_BRAIN_BEARER")
-        base = os.environ.get("BRAIN_BASE")
-        if not token or not base:
-            return
-        shop = "drunderhood-fortsmith"
-        h = {"Authorization": f"Bearer {token}"}
         try:
-            async with httpx.AsyncClient(timeout=30.0) as c:
-                s = await c.get(f"{base}/api/brain/stats?shop_id={shop}", headers=h)
-                ro = await c.get(f"{base}/api/brain/recent-outcomes?shop_id={shop}&limit=200", headers=h)
-            if ro.status_code == 200:
-                events = ro.json().get("events", [])
-                if events:
-                    await db_ref["brain_mirror_outcomes"].delete_many({})
-                    await db_ref["brain_mirror_outcomes"].insert_many(events)
-            if s.status_code == 200:
-                from datetime import datetime, timezone as _tz
-                stats_doc = s.json()
-                stats_doc["mirrored_at"] = datetime.now(_tz.utc).isoformat()
-                await db_ref["brain_mirror_stats"].update_one(
-                    {"shop_id": shop}, {"$set": stats_doc}, upsert=True
-                )
-            logger.info("brain resync complete")
+            report = await brain_client.mirror_sync(db_ref)
+            logger.info("brain resync: %s", report)
         except Exception as e:
             logger.exception("brain resync failed: %s", e)
 

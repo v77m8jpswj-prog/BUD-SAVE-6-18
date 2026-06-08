@@ -74,6 +74,37 @@ Rule #1 expanded with zero-tolerance upsell language list after platform injecti
   escalation per OG handoff section 4.
 
 
+## 2026-06-08 — Bud↔9 brain fully wired
+
+- 9's preview stack went dark on /api/brain/*; switched BRAIN_BASE in backend/.env
+  from dialogue-bot-9.preview... → foreman.drunderhood.com (the prod URL OG named
+  in og_handoff §3.2). Read pipe + write pipe both green again.
+- Built /app/backend/brain_client.py (typed async client: stats, cases,
+  recent-outcomes, post_morning_briefing, mirror_sync).
+- Added /app/backend/brain.py router exposing /api/brain/{status,sync-now,
+  cases-mirror?q=}. Cases-mirror does client-side substring search since 9's
+  server-side filter params are not honored yet.
+- Wired brain into /app/backend/briefing.py: every 7 AM briefing now includes a
+  Shop Brain section with live stats + 5 most recent cases. Verified in
+  preview output (today shows the 2017 Tahoe cam/lifters PARTIAL case from 9).
+- Replaced inline brain_resync block in server.py with brain_client.mirror_sync.
+  3 AM CT auto-resync still on the scheduler.
+- Added Shop Brain panel to /app/frontend/src/App.js (cases / vehicles / techs /
+  top makes / sync button). data-testids: section-shop-brain, brain-cases,
+  brain-stats, brain-sync-btn, brain-loading, brain-offline.
+- Sent status letters: R4 to 9 (asked about ::unknown source field, server-side
+  search, write endpoint) and R4 to OG (status drop).
+- Outstanding from 9: source-field name for morning-briefing tagging,
+  /api/brain/cases server-side filters, POST /api/brain/cases write endpoint.
+
+## Bud↔OG↔9 pipe state (as of 2026-06-08 17:13 UTC)
+
+- Bud → OG: outbound delivered. OG → Bud: inbound confirmed (R2 letter
+  "OG → Bud R2 — peer config received, pipe two-way LIVE" landed 17:02 UTC).
+- Bud → 9 agent-mail: outbound delivered. Bud → 9 brain (read): HTTP 200.
+  Bud → 9 brain (morning-briefing POST): HTTP 200. Bud's R4 letter awaiting
+  9's reply (last inbound from 9 was 5/29).
+
 ## 2026-06-05 (evening) — Fork resumed, authority granted, full regression PASS
 
 - Backend was crashed at fork-start: `NameError: trip_return_router is not defined`
