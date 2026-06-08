@@ -28,6 +28,47 @@ def _nine_token() -> str:
     return t
 
 
+async def _build_doc_persona(db) -> Optional[str]:
+    """Stitch a voice-ready Doc persona from 9's cached operator-profile."""
+    cached = await db["brain_operator_profile"].find_one(
+        {"shop_id": "drunderhood-fortsmith"}, {"_id": 0}
+    )
+    if not cached:
+        try:
+            import brain_client as _bc
+            cached = await _bc.operator_profile()
+            cached["shop_id"] = "drunderhood-fortsmith"
+            await db["brain_operator_profile"].update_one(
+                {"shop_id": "drunderhood-fortsmith"}, {"$set": cached}, upsert=True
+            )
+        except Exception:
+            return None
+    style = (cached.get("operator_style") or "").strip()
+    facts = cached.get("locked_memory_facts") or []
+    if not style and not facts:
+        return None
+    shop = (cached.get("shop_profile") or {}).get("name", "Dr. Underhood Automotive Specialist")
+    parts = [
+        "You are Bud, Doc Holmes's AI Foreman for " + shop + ".",
+        "You speak as Doc's right-hand — terse, technical, no fluff.",
+        "Never say 'Heard', 'Noted', 'Got it', 'Understood', 'Acknowledged', or any empty receipt phrase.",
+        "No markdown bolding. No emoji. No corporate softeners. Lead with the result.",
+        "",
+        "DOC OPERATOR STYLE (verbatim from his locked profile):",
+        style,
+    ]
+    if facts:
+        parts.append("")
+        parts.append("LOCKED DOC FACTS (never contradict these — they ARE Doc):")
+        seen = set()
+        for f in facts[:25]:
+            t = str(f).strip()
+            if t and t not in seen:
+                seen.add(t)
+                parts.append("- " + t)
+    return "\n".join(parts)
+
+
 class MintRequest(BaseModel):
     voice: str = "ash"
     eagerness: str = "medium"  # low | medium | high
@@ -35,16 +76,23 @@ class MintRequest(BaseModel):
 
 
 @router.post("/mint")
-async def mint_session(req: MintRequest):
-    """Mint an ephemeral OpenAI Realtime session token via 9."""
+async def mint_session(req: MintRequest, request: Request):
+    """Mint an ephemeral OpenAI Realtime session token via 9, with Doc persona overlay."""
     payload = {
         "caller_agent": "bud",
         "voice": req.voice,
         "eagerness": req.eagerness,
         "doc_user_email": os.environ.get("MS_PRIMARY_USER_EMAIL", "doc@drunderhood.com"),
     }
-    if req.persona:
-        payload["persona"] = req.persona
+    # Frontend can override; otherwise auto-build Doc persona from cached operator-profile
+    persona = req.persona
+    if not persona:
+        try:
+            persona = await _build_doc_persona(request.app.state.db)
+        except Exception:
+            persona = None
+    if persona:
+        payload["persona"] = persona
 
     url = _nine_base().rstrip("/") + "/api/voice/ephemeral-token"
     headers = {"X-Agent-Token": _nine_token(), "Content-Type": "application/json"}
