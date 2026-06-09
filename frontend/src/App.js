@@ -132,6 +132,12 @@ function App() {
   const [newTaskTitle, setNewTaskTitle] = useState("");
   const [smsInbound, setSmsInbound] = useState([]);
   const [ingestQueue, setIngestQueue] = useState(null);
+  const [askInput, setAskInput] = useState("");
+  const [askMake, setAskMake] = useState("");
+  const [askModel, setAskModel] = useState("");
+  const [askYear, setAskYear] = useState("");
+  const [askResult, setAskResult] = useState(null);
+  const [askBusy, setAskBusy] = useState(false);
   const lastInboundIdRef = useRef(null);
   const lastInboundInitRef = useRef(false);
   const [sendOpen, setSendOpen] = useState(false);
@@ -269,6 +275,29 @@ function App() {
       refresh();
     } catch (e) {
       showToast("scan failed", "err");
+    }
+  };
+
+  const askBrain = async () => {
+    const symptom = askInput.trim();
+    if (!symptom) return;
+    setAskBusy(true);
+    setAskResult(null);
+    try {
+      const vehicle = {};
+      if (askYear.trim()) vehicle.year = askYear.trim();
+      if (askMake.trim()) vehicle.make = askMake.trim();
+      if (askModel.trim()) vehicle.model = askModel.trim();
+      const r = await axios.post(`${API}/brain/ask`, {
+        symptom,
+        vehicle: Object.keys(vehicle).length ? vehicle : undefined,
+      });
+      setAskResult(r.data);
+    } catch (e) {
+      const detail = e?.response?.data?.detail || "ask failed";
+      showToast(detail.slice(0, 120), "err");
+    } finally {
+      setAskBusy(false);
     }
   };
 
@@ -802,6 +831,92 @@ function App() {
                     </div>
                   </div>
                 ))}
+              </div>
+            )}
+          </Section>
+
+          <Section
+            title="Ask the Brain"
+            kicker="9 / WRENCH · CASE LOOKUP"
+          >
+            <div className="space-y-2" data-testid="brain-ask-form">
+              <input
+                value={askInput}
+                onChange={(e) => setAskInput(e.target.value)}
+                placeholder="symptom — e.g. AFM lifter ticking cold start, P0300 misfire cyl 7"
+                className="bud-input w-full px-3 py-2 text-sm rounded"
+                data-testid="brain-ask-symptom"
+              />
+              <div className="grid grid-cols-3 gap-2">
+                <input
+                  value={askYear}
+                  onChange={(e) => setAskYear(e.target.value)}
+                  placeholder="year"
+                  className="bud-input px-3 py-2 text-sm rounded"
+                  data-testid="brain-ask-year"
+                />
+                <input
+                  value={askMake}
+                  onChange={(e) => setAskMake(e.target.value)}
+                  placeholder="make"
+                  className="bud-input px-3 py-2 text-sm rounded"
+                  data-testid="brain-ask-make"
+                />
+                <input
+                  value={askModel}
+                  onChange={(e) => setAskModel(e.target.value)}
+                  placeholder="model"
+                  className="bud-input px-3 py-2 text-sm rounded"
+                  data-testid="brain-ask-model"
+                />
+              </div>
+              <button
+                onClick={askBrain}
+                disabled={askBusy || !askInput.trim()}
+                className="bud-btn-primary px-4 py-2 rounded text-sm"
+                data-testid="brain-ask-btn"
+              >
+                {askBusy ? "asking…" : "ask"}
+              </button>
+            </div>
+            {askResult && (
+              <div className="mt-3 space-y-2 max-h-[420px] overflow-auto pr-1" data-testid="brain-ask-result">
+                {(askResult.matches || []).slice(0, 5).map((m, i) => (
+                  <div key={m.case_id || i} className="bud-card-inset p-3 text-xs" data-testid={`brain-ask-match-${i}`}>
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-[var(--bud-text)] font-mono">{m.case_id || `#${i + 1}`}</span>
+                      <span className="bud-pill bud-pill-amber text-[10px] px-2 py-1 rounded">
+                        {Math.round((m.similarity || 0) * 100)}% match
+                      </span>
+                    </div>
+                    {m.vehicle_summary && (
+                      <div className="text-[var(--bud-amber)] mb-1">{m.vehicle_summary}</div>
+                    )}
+                    {m.symptom && (
+                      <div className="text-[var(--bud-muted)] mb-1">
+                        <span className="text-[10px] tracking-[0.2em]">SYMPTOM: </span>
+                        {m.symptom}
+                      </div>
+                    )}
+                    {m.root_cause && (
+                      <div className="text-[var(--bud-text)] mb-1">
+                        <span className="text-[10px] tracking-[0.2em] text-[var(--bud-muted)]">ROOT: </span>
+                        {m.root_cause}
+                      </div>
+                    )}
+                    {m.repair_summary && (
+                      <div className="text-[var(--bud-text)] whitespace-pre-wrap">
+                        <span className="text-[10px] tracking-[0.2em] text-[var(--bud-muted)]">REPAIR: </span>
+                        {m.repair_summary}
+                      </div>
+                    )}
+                  </div>
+                ))}
+                {(!askResult.matches || askResult.matches.length === 0) && (
+                  <div className="bud-card-inset p-3 text-xs text-[var(--bud-muted)]">
+                    no similar cases in 9's brain. consider logging this one as a new case once resolved.
+                  </div>
+                )}
               </div>
             )}
           </Section>

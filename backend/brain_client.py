@@ -120,6 +120,22 @@ async def post_morning_briefing(
     return r.json()
 
 
+async def ask(symptom: str, vehicle: Optional[dict] = None, shop_id: str = DEFAULT_SHOP) -> dict:
+    """Query 9's brain for similar past cases. Returns 9's structured answer
+    (top matches + suggested actions). `vehicle` fields must be strings —
+    9's Pydantic validator rejects integer year."""
+    base, token = _cfg()
+    payload: dict = {"shop_id": shop_id, "symptom": symptom}
+    if vehicle:
+        # coerce year to str for 9's schema
+        v = {k: (str(val) if k == "year" else val) for k, val in vehicle.items()}
+        payload["vehicle"] = v
+    async with httpx.AsyncClient(timeout=30.0) as c:
+        r = await c.post(f"{base}/api/brain/ask", json=payload, headers=_h(token))
+    r.raise_for_status()
+    return r.json()
+
+
 async def mirror_sync(db, shop_id: str = DEFAULT_SHOP) -> dict:
     """Pull stats + recent-outcomes + cases into local mongo. Returns a small report."""
     report: dict = {"shop_id": shop_id, "mirrored_at": datetime.now(timezone.utc).isoformat()}

@@ -13,6 +13,7 @@ import logging
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
+from pydantic import BaseModel
 
 import brain_client
 
@@ -72,6 +73,21 @@ async def operator_profile_proxy(request: Request, refresh: bool = False):
     return {"source": "live", "profile": profile}
 
 
+class AskRequest(BaseModel):
+    symptom: str
+    vehicle: Optional[dict] = None
+
+
+@router.post("/ask")
+async def ask_brain(request: Request, body: AskRequest):
+    """Forward a diagnostic question to 9's case-lookup brain. Returns 9's
+    structured response (similar past cases + suggested actions)."""
+    try:
+        return await brain_client.ask(body.symptom, body.vehicle, SHOP)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"brain ask failed: {e}")
+
+
 @router.get("/cases-mirror")
 async def cases_mirror(
     request: Request,
@@ -81,7 +97,6 @@ async def cases_mirror(
     db = request.app.state.db
     filt: dict = {"shop_id": SHOP}
     if q:
-        # plain $regex on the obvious case fields
         filt["$or"] = [
             {"symptom": {"$regex": q, "$options": "i"}},
             {"repair_summary": {"$regex": q, "$options": "i"}},
