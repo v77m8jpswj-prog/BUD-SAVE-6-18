@@ -138,6 +138,8 @@ function App() {
   const [askYear, setAskYear] = useState("");
   const [askResult, setAskResult] = useState(null);
   const [askBusy, setAskBusy] = useState(false);
+  const [customerName, setCustomerName] = useState("");
+  const [estimateDrafts, setEstimateDrafts] = useState({});  // case_id -> {draft, asset_id, channel, busy}
   const lastInboundIdRef = useRef(null);
   const lastInboundInitRef = useRef(false);
   const [sendOpen, setSendOpen] = useState(false);
@@ -283,6 +285,7 @@ function App() {
     if (!symptom) return;
     setAskBusy(true);
     setAskResult(null);
+    setEstimateDrafts({});
     try {
       const vehicle = {};
       if (askYear.trim()) vehicle.year = askYear.trim();
@@ -298,6 +301,28 @@ function App() {
       showToast(detail.slice(0, 120), "err");
     } finally {
       setAskBusy(false);
+    }
+  };
+
+  const draftEstimate = async (match, channel = "email") => {
+    const key = match.case_id || JSON.stringify(match).slice(0, 32);
+    setEstimateDrafts((s) => ({ ...s, [key]: { ...(s[key] || {}), busy: true } }));
+    try {
+      const r = await axios.post(`${API}/brain/draft-estimate`, {
+        match,
+        customer_name: customerName.trim() || null,
+        channel,
+      });
+      setEstimateDrafts((s) => ({
+        ...s,
+        [key]: { draft: r.data.draft, asset_id: r.data.asset_id, channel, busy: false },
+      }));
+      showToast("estimate drafted (saved to Quick Assets)");
+      refresh();
+    } catch (e) {
+      const detail = e?.response?.data?.detail || "draft failed";
+      showToast(detail.slice(0, 120), "err");
+      setEstimateDrafts((s) => ({ ...s, [key]: { ...(s[key] || {}), busy: false } }));
     }
   };
 
@@ -870,48 +895,103 @@ function App() {
                   data-testid="brain-ask-model"
                 />
               </div>
-              <button
-                onClick={askBrain}
-                disabled={askBusy || !askInput.trim()}
-                className="bud-btn-primary px-4 py-2 rounded text-sm"
-                data-testid="brain-ask-btn"
-              >
-                {askBusy ? "asking…" : "ask"}
-              </button>
+              <div className="flex gap-2 items-center">
+                <input
+                  value={customerName}
+                  onChange={(e) => setCustomerName(e.target.value)}
+                  placeholder="customer name (optional, used in estimate draft)"
+                  className="bud-input flex-1 px-3 py-2 text-sm rounded"
+                  data-testid="brain-ask-customer"
+                />
+                <button
+                  onClick={askBrain}
+                  disabled={askBusy || !askInput.trim()}
+                  className="bud-btn-primary px-4 py-2 rounded text-sm"
+                  data-testid="brain-ask-btn"
+                >
+                  {askBusy ? "asking…" : "ask"}
+                </button>
+              </div>
             </div>
             {askResult && (
               <div className="mt-3 space-y-2 max-h-[420px] overflow-auto pr-1" data-testid="brain-ask-result">
-                {(askResult.matches || []).slice(0, 5).map((m, i) => (
-                  <div key={m.case_id || i} className="bud-card-inset p-3 text-xs" data-testid={`brain-ask-match-${i}`}>
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="text-[var(--bud-text)] font-mono">{m.case_id || `#${i + 1}`}</span>
-                      <span className="bud-pill bud-pill-amber text-[10px] px-2 py-1 rounded">
-                        {Math.round((m.similarity || 0) * 100)}% match
-                      </span>
+                {(askResult.matches || []).slice(0, 5).map((m, i) => {
+                  const key = m.case_id || `idx-${i}`;
+                  const est = estimateDrafts[key];
+                  return (
+                    <div key={key} className="bud-card-inset p-3 text-xs" data-testid={`brain-ask-match-${i}`}>
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-[var(--bud-text)] font-mono">{m.case_id || `#${i + 1}`}</span>
+                        <span className="bud-pill bud-pill-amber text-[10px] px-2 py-1 rounded">
+                          {Math.round((m.similarity || 0) * 100)}% match
+                        </span>
+                      </div>
+                      {m.vehicle_summary && (
+                        <div className="text-[var(--bud-amber)] mb-1">{m.vehicle_summary}</div>
+                      )}
+                      {m.symptom && (
+                        <div className="text-[var(--bud-muted)] mb-1">
+                          <span className="text-[10px] tracking-[0.2em]">SYMPTOM: </span>
+                          {m.symptom}
+                        </div>
+                      )}
+                      {m.root_cause && (
+                        <div className="text-[var(--bud-text)] mb-1">
+                          <span className="text-[10px] tracking-[0.2em] text-[var(--bud-muted)]">ROOT: </span>
+                          {m.root_cause}
+                        </div>
+                      )}
+                      {m.repair_summary && (
+                        <div className="text-[var(--bud-text)] whitespace-pre-wrap">
+                          <span className="text-[10px] tracking-[0.2em] text-[var(--bud-muted)]">REPAIR: </span>
+                          {m.repair_summary}
+                        </div>
+                      )}
+                      <div className="flex flex-wrap items-center gap-2 mt-3 pt-2 border-t border-[var(--bud-border)]">
+                        <button
+                          onClick={() => draftEstimate(m, "email")}
+                          disabled={est?.busy}
+                          className="bud-btn-primary px-3 py-1 rounded text-[11px]"
+                          data-testid={`brain-ask-draft-email-${i}`}
+                          title="Generate a customer email in Doc's voice (DRAFT-ONLY)"
+                        >
+                          {est?.busy && est.channel === "email" ? "drafting…" : "draft email"}
+                        </button>
+                        <button
+                          onClick={() => draftEstimate(m, "sms")}
+                          disabled={est?.busy}
+                          className="bud-btn-ghost px-3 py-1 rounded text-[11px]"
+                          data-testid={`brain-ask-draft-sms-${i}`}
+                          title="Generate a customer SMS in Doc's voice (DRAFT-ONLY)"
+                        >
+                          {est?.busy && est.channel === "sms" ? "drafting…" : "draft sms"}
+                        </button>
+                        <span className="text-[10px] text-[var(--bud-muted)]">
+                          DRAFT-ONLY · saved to Quick Assets
+                        </span>
+                      </div>
+                      {est?.draft && (
+                        <div className="mt-3 bud-card-inset p-3" data-testid={`brain-ask-draft-result-${i}`}>
+                          <div className="flex items-center justify-between mb-2">
+                            <span className="text-[10px] tracking-[0.25em] text-[var(--bud-muted)]">
+                              DRAFT · {est.channel.toUpperCase()} · {est.draft.length} CHARS
+                            </span>
+                            <button
+                              onClick={() => { navigator.clipboard.writeText(est.draft); showToast("draft copied"); }}
+                              className="bud-btn-ghost px-2 py-1 rounded text-[10px]"
+                              data-testid={`brain-ask-draft-copy-${i}`}
+                            >
+                              copy
+                            </button>
+                          </div>
+                          <div className="text-sm text-[var(--bud-amber)] whitespace-pre-wrap break-words font-mono leading-relaxed">
+                            {est.draft}
+                          </div>
+                        </div>
+                      )}
                     </div>
-                    {m.vehicle_summary && (
-                      <div className="text-[var(--bud-amber)] mb-1">{m.vehicle_summary}</div>
-                    )}
-                    {m.symptom && (
-                      <div className="text-[var(--bud-muted)] mb-1">
-                        <span className="text-[10px] tracking-[0.2em]">SYMPTOM: </span>
-                        {m.symptom}
-                      </div>
-                    )}
-                    {m.root_cause && (
-                      <div className="text-[var(--bud-text)] mb-1">
-                        <span className="text-[10px] tracking-[0.2em] text-[var(--bud-muted)]">ROOT: </span>
-                        {m.root_cause}
-                      </div>
-                    )}
-                    {m.repair_summary && (
-                      <div className="text-[var(--bud-text)] whitespace-pre-wrap">
-                        <span className="text-[10px] tracking-[0.2em] text-[var(--bud-muted)]">REPAIR: </span>
-                        {m.repair_summary}
-                      </div>
-                    )}
-                  </div>
-                ))}
+                  );
+                })}
                 {(!askResult.matches || askResult.matches.length === 0) && (
                   <div className="bud-card-inset p-3 text-xs text-[var(--bud-muted)]">
                     no similar cases in 9's brain. consider logging this one as a new case once resolved.
