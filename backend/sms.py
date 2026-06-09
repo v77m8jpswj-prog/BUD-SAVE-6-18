@@ -197,4 +197,104 @@ async def config():
         "secret_header": "X-Sms-Shared-Secret",
         "shared_secret_set": secret_set,
         "reply_mode": "DRAFT-ONLY (per Doc rule 15)",
+        "outbound_send_enabled": bool(os.environ.get("TWILIO_ACCOUNT_SID") and os.environ.get("TWILIO_AUTH_TOKEN")),
     }
+
+
+# ---- Outbound send (kill-flag gated) -----------------------------------
+
+OUTBOUND_FLAG_KEY = "sms.outbound.send_enabled"
+
+
+async def _outbound_enabled(db) -> bool:
+    """Two-key gate: env creds present AND mongo flag enabled."""
+    if not (os.environ.get("TWILIO_ACCOUNT_SID") and os.environ.get("TWILIO_AUTH_TOKEN") and os.environ.get("TWILIO_FROM_NUMBER")):
+        return False
+    flag = await db["bud_flags"].find_one({"_id": OUTBOUND_FLAG_KEY})
+    return bool(flag and flag.get("enabled"))
+
+
+class OutboundSend(BaseModel):
+    to: str
+    body: str
+    sms_id: Optional[str] = None  # if replying to an inbound, the sms_inbound.id
+
+
+class OutboundFlag(BaseModel):
+    enabled: bool
+
+
+@router.post("/outbound/enable")
+async def outbound_enable(request: Request, body: OutboundFlag):
+    """Doc-only toggle to flip outbound on/off. Stays off by default."""
+    db = request.app.state.db
+    await db["bud_flags"].update_one(
+        {"_id": OUTBOUND_FLAG_KEY},
+        {"$set": {"enabled": body.enabled, "updated_at": _now()}},
+        upsert=True,
+    )
+    return {"outbound_send_enabled": body.enabled}
+
+
+@router.post("/outbound/send")
+async def outbound_send(request: Request, body: OutboundSend):
+    """Send via Twilio REST API. Gated by env creds + mongo flag.
+    Refuses to fire unless BOTH are green."""
+    db = request.app.state.db
+    if not await _outbound_enabled(db):
+        raise HTTPException(
+            status_code=409,
+            detail="outbound send disabled. either Twilio env creds missing or feature flag is off (POST /api/sms/outbound/enable {\"enabled\":true}).",
+        )
+
+    sid = os.environ["TWILIO_ACCOUNT_SID"]
+    token = os.environ["TWILIO_AUTH_TOKEN"]
+    from_num = os.environ["TWILIO_FROM_NUMBER"]
+    status_cb = os.environ.get("TWILIO_STATUS_CALLBACK_URL")
+
+    import httpx
+    form = {"From": from_num, "To": body.to, "Body": body.body}
+    if status_cb:
+        form["StatusCallback"] = status_cb
+
+    url = f"https://api.twilio.com/2010-04-01/Accounts/{sid}/Messages.json"
+    try:
+        async with httpx.AsyncClient(timeout=20.0, auth=(sid, token)) as c:
+            r = await c.post(url, data=form)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"twilio request failed: {e}")
+
+    out_doc = {
+        "id": str(uuid.uuid4()),
+        "to_phone": body.to,
+        "from_phone": from_num,
+        "body": body.body,
+        "in_reply_to_sms_id": body.sms_id,
+        "sent_at": _now(),
+        "twilio_status": r.status_code,
+        "twilio_response": r.json() if r.headers.get("content-type", "").startswith("application/json") else r.text[:500],
+    }
+    await db["sms_outbound"].insert_one(out_doc)
+
+    # if this was a reply to an inbound, mark sent
+    if body.sms_id:
+        await db[COL].update_one(
+            {"id": body.sms_id},
+            {"$set": {"draft_sent": True, "draft_sent_at": _now(), "outbound_id": out_doc["id"]}},
+        )
+
+    if r.status_code >= 400:
+        raise HTTPException(
+            status_code=502,
+            detail=f"twilio rejected: HTTP {r.status_code} — {r.text[:300]}",
+        )
+
+    out_doc.pop("_id", None)
+    return {"ok": True, "outbound": out_doc}
+
+
+@router.get("/outbound")
+async def list_outbound(request: Request, limit: int = Query(default=50, ge=1, le=200)):
+    db = request.app.state.db
+    items = await db["sms_outbound"].find({}, {"_id": 0}).sort("sent_at", -1).limit(limit).to_list(length=limit)
+    return {"messages": items, "count": len(items)}

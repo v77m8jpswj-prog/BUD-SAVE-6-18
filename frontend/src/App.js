@@ -770,13 +770,34 @@ function App() {
                       {m.draft_sent ? (
                         <span className="bud-pill bud-pill-amber text-[10px] px-2 py-1 rounded">sent</span>
                       ) : (
-                        <button
-                          onClick={async () => { await axios.post(`${API}/sms/inbound/mark-sent`, { sms_id: m.id }); showToast("marked sent"); refresh(); }}
-                          className="bud-btn-ghost px-3 py-1 rounded text-xs"
-                          data-testid={`sms-mark-sent-btn-${m.id}`}
-                        >
-                          mark sent
-                        </button>
+                        <>
+                          <button
+                            onClick={async () => {
+                              try {
+                                await axios.post(`${API}/sms/outbound/send`, {
+                                  to: m.from_phone, body: m.draft_reply, sms_id: m.id,
+                                });
+                                showToast("sent via Twilio");
+                                refresh();
+                              } catch (e) {
+                                const detail = e?.response?.data?.detail || "send failed";
+                                showToast(detail.slice(0, 120), "err");
+                              }
+                            }}
+                            className="bud-btn-primary px-3 py-1 rounded text-xs"
+                            data-testid={`sms-send-btn-${m.id}`}
+                            title="send via Twilio (requires Doc to enable outbound)"
+                          >
+                            send
+                          </button>
+                          <button
+                            onClick={async () => { await axios.post(`${API}/sms/inbound/mark-sent`, { sms_id: m.id }); showToast("marked sent"); refresh(); }}
+                            className="bud-btn-ghost px-3 py-1 rounded text-xs"
+                            data-testid={`sms-mark-sent-btn-${m.id}`}
+                          >
+                            mark sent
+                          </button>
+                        </>
                       )}
                     </div>
                   </div>
