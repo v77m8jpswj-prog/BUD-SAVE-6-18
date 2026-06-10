@@ -193,7 +193,11 @@ async def startup_scheduler():
     # Brain email-ingest scanner — every 15 min, plus a flush attempt
     async def _brain_ingest_tick():
         try:
-            await scan_brain_emails(db)
+            # kill-switch: if bud_flags.outlook_paused.enabled is true, skip the
+            # inbox scan (still try the flush which doesn't touch Microsoft).
+            flag = await db["bud_flags"].find_one({"_id": "outlook.paused"})
+            if not (flag and flag.get("enabled")):
+                await scan_brain_emails(db)
             await flush_queue(db)
         except Exception as e:
             logger.exception("brain ingest tick failed: %s", e)
