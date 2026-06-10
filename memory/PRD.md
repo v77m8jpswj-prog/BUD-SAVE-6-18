@@ -74,6 +74,35 @@ Rule #1 expanded with zero-tolerance upsell language list after platform injecti
   escalation per OG handoff section 4.
 
 
+## 2026-06-10 — Auth gate shipped, deploy-ready
+
+Doc picked option (1): Emergent-managed Google sign-in tied to doc@drunderhood.com.
+
+- `/app/backend/auth.py` — Emergent Google Auth router: POST /api/auth/session (exchange session_id), GET /api/auth/me, POST /api/auth/logout.
+- httpOnly session cookie (secure, samesite=none, path=/, 7-day TTL). Bearer header fallback supported for testing.
+- `ALLOWED_EMAILS` env var (comma-separated allowlist). Set to `doc@drunderhood.com` in backend/.env.
+- Auth middleware in server.py protects every `/api/*` route except:
+  - `/api/health`
+  - `/api/auth/*`
+  - `/api/agent-mail/inbox`, `/api/agent-mail/config` (X-Agent-Token auth, used by 9 / OG)
+  - `/api/sms/inbound` (X-Sms-Shared-Secret, used by Twilio / 9 forwarder)
+  - `/api/outlook/oauth/*` (Microsoft hits the callback)
+- Frontend: `function App()` renamed to `BudDashboard`; new `AuthGate` is the default export. Handles three states: checking, gate (Sign in with Google card), authed (renders BudDashboard).
+- Session_id hash detection during render (NOT useEffect — prevents race), processedRef guards single-exchange, hash stripped on success.
+- Login button uses `window.location.origin + "/"` — REMINDER comment included in code per playbook.
+- Header chip shows current user email + "SIGN OUT" button.
+- axios.defaults.withCredentials = true so all API calls send the session cookie.
+- `/app/auth_testing.md` and `/app/memory/test_credentials.md` written with seed-session snippet for QA.
+
+Verified end-to-end:
+- Unauth GET /api/agent-mail/letters → 401
+- Unauth GET /api/health → 200
+- Authed bearer GET /api/auth/me → user doc returned
+- 9/OG pipe: POST /api/agent-mail/inbox with X-Agent-Token → 200 (no session needed — pipe unbroken)
+- Frontend gate renders, sign-in button visible. Seeded session cookie → dashboard loads with email chip + SIGN OUT button. Zero console errors.
+
+Deployment readiness: PASS (auth gate was the only structural blocker remaining).
+
 ## 2026-06-08 (late) — Three modules shipped: tasks, SMS relay, email-to-brain
 
 Per Doc's "D" pick (build all three of: BRAIN: parser, Twilio inbound, task queue):

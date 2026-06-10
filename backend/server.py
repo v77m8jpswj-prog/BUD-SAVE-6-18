@@ -25,6 +25,7 @@ from brain import router as brain_router
 from brain_ingest import router as brain_ingest_router, scan_brain_emails, flush_queue
 from sms import router as sms_router
 from tasks import router as tasks_router
+from auth import router as auth_router, auth_middleware
 import brain_client
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -107,6 +108,10 @@ app.include_router(brain_router)
 app.include_router(brain_ingest_router)
 app.include_router(sms_router)
 app.include_router(tasks_router)
+app.include_router(auth_router)
+
+# Auth gate — protects all /api/* except PUBLIC_PREFIXES defined in auth.py.
+# Must be added AFTER CORS so preflight OPTIONS isn't blocked.
 
 app.add_middleware(
     CORSMiddleware,
@@ -115,6 +120,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.middleware("http")(auth_middleware)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -129,6 +135,26 @@ async def shutdown_db_client():
     if sched and sched.running:
         sched.shutdown(wait=False)
     client.close()
+
+
+@app.on_event("startup")
+async def ensure_indexes():
+    """One-time index creation for the hot collections. Safe to call repeatedly —
+    pymongo no-ops if the index already exists."""
+    try:
+        await db["agent_letters"].create_index([("received_at", -1)])
+        await db["agent_letters"].create_index([("direction", 1), ("received_at", -1)])
+        await db["bud_tasks"].create_index([("status", 1), ("priority", 1), ("created_at", -1)])
+        await db["bud_tasks"].create_index([("source", 1), ("source_ref", 1)])
+        await db["sms_inbound"].create_index([("received_at", -1)])
+        await db["sms_inbound"].create_index([("message_sid", 1)], unique=False, sparse=True)
+        await db["bud_assets"].create_index([("archived", 1), ("created_at", -1)])
+        await db["brain_mirror_cases"].create_index([("shop_id", 1), ("created_at", -1)])
+        await db["brain_ingest_queue"].create_index([("status", 1), ("queued_at", -1)])
+        await db["brain_ingest_queue"].create_index([("outlook_message_id", 1)], unique=False, sparse=True)
+        logger.info("mongo indexes ensured")
+    except Exception as e:
+        logger.warning("index ensure failed (non-fatal): %s", e)
 
 
 @app.on_event("startup")

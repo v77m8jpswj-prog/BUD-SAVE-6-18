@@ -36,6 +36,7 @@ import {
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
+axios.defaults.withCredentials = true;
 
 function CopyChip({ value, label }) {
   const [copied, setCopied] = useState(false);
@@ -103,7 +104,7 @@ function Section({ title, kicker, right, children }) {
   );
 }
 
-function App() {
+function BudDashboard({ currentUser, onSignOut }) {
   const [health, setHealth] = useState(null);
   const [config, setConfig] = useState(null);
   const [letters, setLetters] = useState([]);
@@ -645,6 +646,21 @@ function App() {
             >
               <RefreshCw size={14} />
             </button>
+            {currentUser && (
+              <div className="flex items-center gap-2 ml-2 pl-3 border-l border-[var(--bud-line)]" data-testid="auth-user-chip">
+                <span className="text-[10px] tracking-[0.2em] text-[var(--bud-muted)] hidden sm:inline">
+                  {currentUser.email}
+                </span>
+                <button
+                  onClick={onSignOut}
+                  className="bud-btn-ghost px-3 py-1 rounded text-[10px] tracking-[0.2em]"
+                  data-testid="auth-signout-btn"
+                  title="sign out"
+                >
+                  SIGN OUT
+                </button>
+              </div>
+            )}
           </div>
         </div>
       </header>
@@ -1834,4 +1850,114 @@ function App() {
   );
 }
 
-export default App;
+function AuthGate() {
+  // REMINDER: DO NOT HARDCODE THE URL, OR ADD ANY FALLBACKS OR REDIRECT URLS, THIS BREAKS THE AUTH
+  const [state, setState] = useState("checking"); // checking | gate | authed | denied
+  const [user, setUser] = useState(null);
+  const [errorMsg, setErrorMsg] = useState(null);
+  const processedRef = useRef(false);
+
+  useEffect(() => {
+    const hash = window.location.hash || "";
+    if (hash.includes("session_id=")) {
+      // Returning from Emergent auth callback. Exchange the session_id once.
+      if (processedRef.current) return;
+      processedRef.current = true;
+      const m = hash.match(/session_id=([^&]+)/);
+      const sessionId = m ? decodeURIComponent(m[1]) : null;
+      if (!sessionId) {
+        setState("gate");
+        return;
+      }
+      (async () => {
+        try {
+          const r = await axios.post(
+            `${API}/auth/session`,
+            { session_id: sessionId },
+            { withCredentials: true }
+          );
+          setUser(r.data.user);
+          setState("authed");
+          // strip the hash so refresh works
+          window.history.replaceState(null, "", window.location.pathname + window.location.search);
+        } catch (e) {
+          const detail = e?.response?.data?.detail || "auth failed";
+          setErrorMsg(detail);
+          setState("denied");
+          window.history.replaceState(null, "", window.location.pathname + window.location.search);
+        }
+      })();
+      return;
+    }
+
+    // Normal page load — check existing session
+    (async () => {
+      try {
+        const r = await axios.get(`${API}/auth/me`, { withCredentials: true });
+        setUser(r.data);
+        setState("authed");
+      } catch (e) {
+        setState("gate");
+      }
+    })();
+  }, []);
+
+  const signIn = () => {
+    // REMINDER: DO NOT HARDCODE THE URL, OR ADD ANY FALLBACKS OR REDIRECT URLS, THIS BREAKS THE AUTH
+    const redirectUrl = window.location.origin + "/";
+    window.location.href = `https://auth.emergentagent.com/?redirect=${encodeURIComponent(redirectUrl)}`;
+  };
+
+  const signOut = async () => {
+    try {
+      await axios.post(`${API}/auth/logout`, {}, { withCredentials: true });
+    } catch (e) {
+      // ignore
+    }
+    setUser(null);
+    setState("gate");
+  };
+
+  if (state === "checking") {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-[var(--bud-bg)]">
+        <div className="bud-card-inset px-6 py-4 text-sm text-[var(--bud-muted)]" data-testid="auth-checking">
+          checking session…
+        </div>
+      </div>
+    );
+  }
+
+  if (state === "authed" && user) {
+    return <BudDashboard currentUser={user} onSignOut={signOut} />;
+  }
+
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-[var(--bud-bg)] px-4">
+      <div className="bud-card-inset p-8 max-w-md w-full text-center space-y-4" data-testid="auth-gate">
+        <div className="text-[11px] tracking-[0.3em] text-[var(--bud-muted)]">BUD</div>
+        <div className="bud-display text-3xl text-[var(--bud-amber)]">DR. UNDERHOOD</div>
+        <div className="text-xs text-[var(--bud-muted)]">
+          Foreman + brain. Private console. Sign in with the allowlisted Google account.
+        </div>
+        {state === "denied" && errorMsg && (
+          <div className="bud-card-inset p-3 text-xs text-[var(--bud-red)]" data-testid="auth-denied">
+            {errorMsg}
+          </div>
+        )}
+        <button
+          onClick={signIn}
+          className="bud-btn-primary w-full px-4 py-3 rounded text-sm"
+          data-testid="auth-signin-btn"
+        >
+          Sign in with Google
+        </button>
+        <div className="text-[10px] text-[var(--bud-muted)]">
+          Access is gated. If you're not on the list you'll be turned away.
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default AuthGate;

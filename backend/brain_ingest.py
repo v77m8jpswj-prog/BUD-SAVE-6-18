@@ -168,7 +168,9 @@ async def flush_queue(db) -> dict:
     import httpx
     flushed, failed = 0, 0
     async with httpx.AsyncClient(timeout=20.0) as client:
-        async for item in db[QUEUE_COL].find({"status": "queued"}):
+        # bounded batch — 50 per tick keeps memory predictable
+        batch = await db[QUEUE_COL].find({"status": "queued"}).limit(50).to_list(length=50)
+        for item in batch:
             payload = {k: v for k, v in item.items() if k not in {"_id", "status", "queued_at", "outlook_message_id", "from_email"}}
             try:
                 resp = await client.post(
