@@ -1103,13 +1103,12 @@ function BudDashboard({ currentUser, onSignOut }) {
                                   </>
                                 )}
                                 {ent.detail?.web_link && (
-                                  <a
-                                    href={ent.detail.web_link}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
+                                  <button
+                                    onClick={() => { window.location.href = ent.detail.web_link; }}
                                     className="bud-btn-ghost px-3 py-1 rounded text-xs"
                                     data-testid={`mail-weblink-${m.id}`}
-                                  >open in outlook</a>
+                                    title="open this email in the Outlook web client"
+                                  >open in outlook</button>
                                 )}
                               </div>
                             </>
