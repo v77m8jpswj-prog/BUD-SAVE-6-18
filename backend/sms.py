@@ -72,7 +72,12 @@ async def _draft_reply(db, customer_text: str, from_phone: str) -> str:
         "Plain prose only. Lead with the answer. ALL CAPS is fine — that's how Doc types. "
         "Curse if it fits. Never lecture. Never re-explain HP Tuners/OBD2/diagnostics — he built that knowledge. "
         "One-question-at-a-time rule. Keep it SMS-short: max 320 chars. "
-        "If customer asks for a quote or appointment, do NOT commit — say Doc will confirm. "
+        "HARD RULE — NEVER COMMIT TO A SCHEDULE OR PRICE: You do NOT have access to Doc's calendar or the shop board. "
+        "Do NOT propose, confirm, or imply ANY specific time, day, or appointment slot. "
+        "Do NOT say 'tomorrow', 'today', 'this week', 'morning', 'AM/PM', 'at 9', or any specific timing. "
+        "Do NOT quote a price. If the customer asks when or how much: acknowledge the issue, ask ONE diagnostic "
+        "question if useful, and say Doc will confirm a slot/quote once he checks the board. Example: "
+        "'GOT IT. IS THE TICK COLD START OR ALL THE TIME? I WILL CONFIRM A SLOT ONCE I CHECK THE BOARD.' "
         "Sign-off: just 'DOC' on its own line. No dash, no emoji.\n\n"
         f"OPERATOR STYLE: {style}\n\n"
         f"LOCKED DOC FACTS:\n{fact_lines}"
@@ -189,6 +194,45 @@ async def mark_sent(request: Request, body: MarkSentRequest):
     if not r:
         raise HTTPException(404, "sms not found")
     return r
+
+
+class DraftEditRequest(BaseModel):
+    sms_id: str
+    draft_reply: str
+
+
+@router.post("/inbound/edit-draft")
+async def edit_draft(request: Request, body: DraftEditRequest):
+    """Doc edits the auto-draft inline."""
+    db = request.app.state.db
+    r = await db[COL].find_one_and_update(
+        {"id": body.sms_id},
+        {"$set": {"draft_reply": body.draft_reply, "draft_edited_at": _now()}},
+        return_document=True,
+        projection={"_id": 0},
+    )
+    if not r:
+        raise HTTPException(404, "sms not found")
+    return r
+
+
+class RegenRequest(BaseModel):
+    sms_id: str
+
+
+@router.post("/inbound/regen-draft")
+async def regen_draft(request: Request, body: RegenRequest):
+    """Re-generate the draft for an existing inbound (after prompt updates)."""
+    db = request.app.state.db
+    doc = await db[COL].find_one({"id": body.sms_id})
+    if not doc:
+        raise HTTPException(404, "sms not found")
+    new_draft = await _draft_reply(db, doc["body"], doc["from_phone"])
+    await db[COL].update_one(
+        {"id": body.sms_id},
+        {"$set": {"draft_reply": new_draft, "draft_regen_at": _now()}},
+    )
+    return {"ok": True, "draft_reply": new_draft}
 
 
 @router.get("/config")

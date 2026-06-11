@@ -132,6 +132,8 @@ function BudDashboard({ currentUser, onSignOut }) {
   const [tasks, setTasks] = useState({ tasks: [], counts: {} });
   const [newTaskTitle, setNewTaskTitle] = useState("");
   const [smsInbound, setSmsInbound] = useState([]);
+  const [smsEdits, setSmsEdits] = useState({}); // {sms_id: edited_text}
+  const [smsBusy, setSmsBusy] = useState({});
   const [ingestQueue, setIngestQueue] = useState(null);
   const [askInput, setAskInput] = useState("");
   const [askMake, setAskMake] = useState("");
@@ -825,48 +827,80 @@ function BudDashboard({ currentUser, onSignOut }) {
                     <div className="text-sm text-[var(--bud-text)] mb-2 whitespace-pre-wrap break-words">
                       {m.body}
                     </div>
-                    <div className="text-[10px] tracking-[0.25em] text-[var(--bud-muted)] mb-1">DRAFT</div>
-                    <div className="text-sm text-[var(--bud-amber)] whitespace-pre-wrap break-words font-mono">
-                      {m.draft_reply}
-                    </div>
-                    <div className="flex items-center gap-2 mt-2">
+                    <div className="text-[10px] tracking-[0.25em] text-[var(--bud-muted)] mb-1">DRAFT (editable)</div>
+                    <textarea
+                      value={smsEdits[m.id] !== undefined ? smsEdits[m.id] : (m.draft_reply || "")}
+                      onChange={(e) => setSmsEdits((s) => ({ ...s, [m.id]: e.target.value }))}
+                      rows={5}
+                      className="bud-input w-full text-sm text-[var(--bud-amber)] font-mono leading-relaxed p-2 rounded resize-y"
+                      data-testid={`sms-draft-edit-${m.id}`}
+                    />
+                    <div className="flex flex-wrap items-center gap-2 mt-2">
                       <button
-                        onClick={() => { navigator.clipboard.writeText(m.draft_reply || ""); showToast("draft copied"); }}
+                        onClick={async () => {
+                          const text = smsEdits[m.id] !== undefined ? smsEdits[m.id] : (m.draft_reply || "");
+                          if (text === m.draft_reply) { showToast("no changes"); return; }
+                          setSmsBusy((b) => ({ ...b, [m.id]: true }));
+                          try {
+                            await axios.post(`${API}/sms/inbound/edit-draft`, { sms_id: m.id, draft_reply: text });
+                            showToast("draft saved");
+                            refresh();
+                          } catch (e) { showToast("save failed", "err"); }
+                          finally { setSmsBusy((b) => ({ ...b, [m.id]: false })); }
+                        }}
+                        disabled={smsBusy[m.id]}
+                        className="bud-btn-ghost px-3 py-1 rounded text-xs"
+                        data-testid={`sms-save-btn-${m.id}`}
+                      >save edit</button>
+                      <button
+                        onClick={async () => {
+                          setSmsBusy((b) => ({ ...b, [m.id]: true }));
+                          try {
+                            const r = await axios.post(`${API}/sms/inbound/regen-draft`, { sms_id: m.id });
+                            setSmsEdits((s) => ({ ...s, [m.id]: r.data.draft_reply }));
+                            showToast("re-drafted");
+                            refresh();
+                          } catch (e) { showToast("regen failed", "err"); }
+                          finally { setSmsBusy((b) => ({ ...b, [m.id]: false })); }
+                        }}
+                        disabled={smsBusy[m.id]}
+                        className="bud-btn-ghost px-3 py-1 rounded text-xs"
+                        data-testid={`sms-regen-btn-${m.id}`}
+                      >re-draft</button>
+                      <button
+                        onClick={() => {
+                          const text = smsEdits[m.id] !== undefined ? smsEdits[m.id] : (m.draft_reply || "");
+                          navigator.clipboard.writeText(text);
+                          showToast("copied — paste into your texts");
+                        }}
                         className="bud-btn-ghost px-3 py-1 rounded text-xs"
                         data-testid={`sms-copy-btn-${m.id}`}
-                      >
-                        copy
-                      </button>
+                      >copy</button>
                       {m.draft_sent ? (
                         <span className="bud-pill bud-pill-amber text-[10px] px-2 py-1 rounded">sent</span>
                       ) : (
                         <>
                           <button
                             onClick={async () => {
+                              const text = smsEdits[m.id] !== undefined ? smsEdits[m.id] : (m.draft_reply || "");
                               try {
-                                await axios.post(`${API}/sms/outbound/send`, {
-                                  to: m.from_phone, body: m.draft_reply, sms_id: m.id,
-                                });
+                                await axios.post(`${API}/sms/outbound/send`, { to: m.from_phone, body: text, sms_id: m.id });
                                 showToast("sent via Twilio");
                                 refresh();
                               } catch (e) {
                                 const detail = e?.response?.data?.detail || "send failed";
-                                showToast(detail.slice(0, 120), "err");
+                                showToast(detail.slice(0, 160), "err");
                               }
                             }}
                             className="bud-btn-primary px-3 py-1 rounded text-xs"
                             data-testid={`sms-send-btn-${m.id}`}
-                            title="send via Twilio (requires Doc to enable outbound)"
-                          >
-                            send
-                          </button>
+                            title="send via Twilio (requires outbound enabled)"
+                          >send</button>
                           <button
                             onClick={async () => { await axios.post(`${API}/sms/inbound/mark-sent`, { sms_id: m.id }); showToast("marked sent"); refresh(); }}
                             className="bud-btn-ghost px-3 py-1 rounded text-xs"
                             data-testid={`sms-mark-sent-btn-${m.id}`}
-                          >
-                            mark sent
-                          </button>
+                          >mark sent</button>
                         </>
                       )}
                     </div>
