@@ -138,6 +138,8 @@ function BudDashboard({ currentUser, onSignOut }) {
   const [chatMessages, setChatMessages] = useState([]);
   const [chatInput, setChatInput] = useState("");
   const [chatBusy, setChatBusy] = useState(false);
+  const [smsOutboundLive, setSmsOutboundLive] = useState(null);
+  const [smsConfig, setSmsConfig] = useState(null);
   const [ingestQueue, setIngestQueue] = useState(null);
   const [askInput, setAskInput] = useState("");
   const [askMake, setAskMake] = useState("");
@@ -162,7 +164,7 @@ function BudDashboard({ currentUser, onSignOut }) {
 
   const refresh = useCallback(async () => {
     try {
-      const [h, c, l, o, a, bL, bS, br, tk, sm, ig] = await Promise.all([
+      const [h, c, l, o, a, bL, bS, br, tk, sm, ig, sc] = await Promise.all([
         axios.get(`${API}/health`),
         axios.get(`${API}/agent-mail/config`),
         axios.get(`${API}/agent-mail/letters?limit=100`),
@@ -174,6 +176,7 @@ function BudDashboard({ currentUser, onSignOut }) {
         axios.get(`${API}/tasks?limit=50`),
         axios.get(`${API}/sms/inbound?limit=20`),
         axios.get(`${API}/brain/ingest/queue`),
+        axios.get(`${API}/sms/config`),
       ]);
       setHealth(h.data);
       setConfig(c.data);
@@ -186,6 +189,8 @@ function BudDashboard({ currentUser, onSignOut }) {
       setTasks(tk.data || { tasks: [], counts: {} });
       setSmsInbound(sm.data?.messages || []);
       setIngestQueue(ig.data);
+      setSmsConfig(sc.data);
+      setSmsOutboundLive(!!sc.data?.outbound_send_enabled);
       if (!baseUrlInput && c.data.bud_base_url) setBaseUrlInput(c.data.bud_base_url);
     } catch (e) {
       console.error("refresh failed", e);
@@ -927,7 +932,25 @@ function BudDashboard({ currentUser, onSignOut }) {
 
           <Section
             title="Inbound SMS"
-            kicker={`+1 855 771 1264 · DRAFT-ONLY · ${smsInbound.length} RECENT`}
+            kicker={`+1 855 771 1264 · ${smsInbound.length} RECENT · OUTBOUND ${smsOutboundLive ? "LIVE" : "OFF"}`}
+            right={
+              <button
+                onClick={async () => {
+                  try {
+                    const r = await axios.post(`${API}/sms/outbound/enable`, { enabled: !smsOutboundLive });
+                    setSmsOutboundLive(!!r.data?.outbound_send_enabled);
+                    showToast(`outbound ${r.data?.outbound_send_enabled ? "LIVE" : "OFF"}`);
+                  } catch (e) {
+                    showToast("toggle failed", "err");
+                  }
+                }}
+                className={`px-3 py-2 rounded text-sm inline-flex items-center gap-2 ${smsOutboundLive ? "bud-btn-primary" : "bud-btn-ghost"}`}
+                data-testid="sms-outbound-toggle"
+                title={smsOutboundLive ? "outbound sending is LIVE — tap to disable" : "outbound sending is OFF — tap to enable"}
+              >
+                {smsOutboundLive ? "outbound: LIVE" : "outbound: OFF"}
+              </button>
+            }
           >
             {smsInbound.length === 0 ? (
               <div className="bud-card-inset p-4 text-xs text-[var(--bud-muted)]" data-testid="sms-empty">
