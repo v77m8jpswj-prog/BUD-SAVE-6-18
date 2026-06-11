@@ -26,6 +26,7 @@ from brain_ingest import router as brain_ingest_router, scan_brain_emails, flush
 from sms import router as sms_router
 from tasks import router as tasks_router
 from auth import router as auth_router, auth_middleware
+from chat import router as chat_router
 import brain_client
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -109,6 +110,7 @@ app.include_router(brain_ingest_router)
 app.include_router(sms_router)
 app.include_router(tasks_router)
 app.include_router(auth_router)
+app.include_router(chat_router)
 
 # Auth gate — protects all /api/* except PUBLIC_PREFIXES defined in auth.py.
 # Must be added AFTER CORS so preflight OPTIONS isn't blocked.

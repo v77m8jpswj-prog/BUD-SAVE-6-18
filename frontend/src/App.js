@@ -134,6 +134,10 @@ function BudDashboard({ currentUser, onSignOut }) {
   const [smsInbound, setSmsInbound] = useState([]);
   const [smsEdits, setSmsEdits] = useState({}); // {sms_id: edited_text}
   const [smsBusy, setSmsBusy] = useState({});
+  const [chatSessionId, setChatSessionId] = useState(() => localStorage.getItem("bud_chat_session") || null);
+  const [chatMessages, setChatMessages] = useState([]);
+  const [chatInput, setChatInput] = useState("");
+  const [chatBusy, setChatBusy] = useState(false);
   const [ingestQueue, setIngestQueue] = useState(null);
   const [askInput, setAskInput] = useState("");
   const [askMake, setAskMake] = useState("");
@@ -281,6 +285,52 @@ function BudDashboard({ currentUser, onSignOut }) {
     } catch (e) {
       showToast("scan failed", "err");
     }
+  };
+
+  // ---- text chat with Bud ----
+  useEffect(() => {
+    if (!chatSessionId) return;
+    (async () => {
+      try {
+        const r = await axios.get(`${API}/chat/history`, { params: { session_id: chatSessionId, limit: 100 } });
+        setChatMessages(r.data?.messages || []);
+      } catch (e) { /* new session or expired */ }
+    })();
+  }, [chatSessionId]);
+
+  const sendChat = async () => {
+    const msg = chatInput.trim();
+    if (!msg || chatBusy) return;
+    setChatBusy(true);
+    const optimistic = { role: "user", content: msg, created_at: new Date().toISOString() };
+    setChatMessages((m) => [...m, optimistic]);
+    setChatInput("");
+    try {
+      const r = await axios.post(`${API}/chat/message`, {
+        message: msg,
+        session_id: chatSessionId || undefined,
+      });
+      const sid = r.data?.session_id;
+      if (sid && sid !== chatSessionId) {
+        setChatSessionId(sid);
+        localStorage.setItem("bud_chat_session", sid);
+      }
+      setChatMessages((m) => [...m, { role: "assistant", content: r.data?.reply || "", created_at: new Date().toISOString() }]);
+    } catch (e) {
+      setChatMessages((m) => [...m, { role: "assistant", content: `[error: ${e?.response?.data?.detail || "send failed"}]`, created_at: new Date().toISOString() }]);
+    } finally {
+      setChatBusy(false);
+    }
+  };
+
+  const clearChat = async () => {
+    if (chatSessionId) {
+      try { await axios.delete(`${API}/chat/session/${chatSessionId}`); } catch (e) {}
+    }
+    localStorage.removeItem("bud_chat_session");
+    setChatSessionId(null);
+    setChatMessages([]);
+    showToast("chat cleared");
   };
 
   const askBrain = async () => {
@@ -671,6 +721,74 @@ function BudDashboard({ currentUser, onSignOut }) {
         {/* LEFT — Identity / inbox creds */}
         <div className="lg:col-span-2 space-y-6">
           <VoiceRealtimePanel showToast={showToast} />
+
+          <Section
+            title="Chat with Bud"
+            kicker={`TEXT · ${chatMessages.length} TURNS`}
+            right={
+              <button
+                onClick={clearChat}
+                className="bud-btn-ghost px-3 py-2 rounded text-sm inline-flex items-center gap-2"
+                data-testid="chat-clear-btn"
+                title="clear chat history"
+              >
+                <Trash2 size={14} /> clear
+              </button>
+            }
+          >
+            <div
+              className="bud-card-inset p-3 max-h-[420px] min-h-[180px] overflow-y-auto space-y-3 mb-3"
+              data-testid="chat-history"
+            >
+              {chatMessages.length === 0 ? (
+                <div className="text-xs text-[var(--bud-muted)]" data-testid="chat-empty">
+                  silent channel. type below — same Doc voice as the voice panel.
+                </div>
+              ) : (
+                chatMessages.map((m, i) => (
+                  <div
+                    key={i}
+                    className={`text-sm whitespace-pre-wrap break-words ${m.role === "user" ? "text-[var(--bud-text)]" : "text-[var(--bud-amber)] font-mono"}`}
+                    data-testid={`chat-msg-${m.role}-${i}`}
+                  >
+                    <span className="text-[10px] tracking-[0.25em] text-[var(--bud-muted)] mr-2">
+                      {m.role === "user" ? "YOU" : "BUD"}
+                    </span>
+                    {m.content}
+                  </div>
+                ))
+              )}
+              {chatBusy && (
+                <div className="text-xs text-[var(--bud-muted)] italic" data-testid="chat-thinking">
+                  bud is typing…
+                </div>
+              )}
+            </div>
+            <div className="flex gap-2">
+              <textarea
+                value={chatInput}
+                onChange={(e) => setChatInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    sendChat();
+                  }
+                }}
+                placeholder="ask bud anything — enter to send, shift+enter for newline"
+                rows={2}
+                className="bud-input flex-1 px-3 py-2 text-sm rounded resize-none"
+                data-testid="chat-input"
+              />
+              <button
+                onClick={sendChat}
+                disabled={chatBusy || !chatInput.trim()}
+                className="bud-btn-primary px-4 py-2 rounded text-sm"
+                data-testid="chat-send-btn"
+              >
+                {chatBusy ? "…" : "send"}
+              </button>
+            </div>
+          </Section>
 
           <Section
             title="Shop Brain"
