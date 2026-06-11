@@ -379,17 +379,18 @@ function BudDashboard({ currentUser, onSignOut }) {
     const ent = mailExpanded[msgId] || {};
     const body = ent.draft;
     if (!body || !body.trim()) { showToast("nothing to send"); return; }
-    if (!window.confirm("Send this reply via your Outlook?")) return;
     setMailExpanded((m) => ({ ...m, [msgId]: { ...(m[msgId] || {}), sending: true } }));
     try {
       const dr = await axios.post(`${API}/outlook/draft`, { message_id: msgId, body });
       const did = dr.data?.draft_id;
+      if (!did) throw new Error("no draft_id returned");
       await axios.post(`${API}/outlook/send/${did}`);
-      showToast("sent");
+      showToast("sent via outlook");
       setMailExpanded((m) => { const c = { ...m }; delete c[msgId]; return c; });
       loadMail();
     } catch (e) {
-      showToast(e?.response?.data?.detail || "send failed", "err");
+      const detail = e?.response?.data?.detail || e?.message || "send failed";
+      showToast(detail.slice(0, 200), "err");
       setMailExpanded((m) => ({ ...m, [msgId]: { ...(m[msgId] || {}), sending: false } }));
     }
   };
