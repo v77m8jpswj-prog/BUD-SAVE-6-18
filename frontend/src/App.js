@@ -138,6 +138,8 @@ function BudDashboard({ currentUser, onSignOut }) {
   const [chatMessages, setChatMessages] = useState([]);
   const [chatInput, setChatInput] = useState("");
   const [chatBusy, setChatBusy] = useState(false);
+  const [mailbox, setMailbox] = useState([]);
+  const [mailExpanded, setMailExpanded] = useState({}); // id -> {body, draft, draft_busy, sending}
   const [smsOutboundLive, setSmsOutboundLive] = useState(null);
   const [smsConfig, setSmsConfig] = useState(null);
   const [ingestQueue, setIngestQueue] = useState(null);
@@ -337,6 +339,65 @@ function BudDashboard({ currentUser, onSignOut }) {
     setChatMessages([]);
     showToast("chat cleared");
   };
+
+  // ---- mailroom ----
+  const loadMail = async () => {
+    try {
+      const r = await axios.get(`${API}/outlook/inbox`, { params: { limit: 25 } });
+      setMailbox(r.data?.messages || []);
+    } catch (e) {
+      showToast("inbox load failed", "err");
+    }
+  };
+
+  const openMail = async (msgId) => {
+    if (mailExpanded[msgId]) {
+      setMailExpanded((m) => { const c = { ...m }; delete c[msgId]; return c; });
+      return;
+    }
+    setMailExpanded((m) => ({ ...m, [msgId]: { loading: true } }));
+    try {
+      const r = await axios.get(`${API}/outlook/message/${msgId}`);
+      setMailExpanded((m) => ({ ...m, [msgId]: { detail: r.data } }));
+    } catch (e) {
+      setMailExpanded((m) => ({ ...m, [msgId]: { error: "load failed" } }));
+    }
+  };
+
+  const draftMailReply = async (msgId) => {
+    setMailExpanded((m) => ({ ...m, [msgId]: { ...(m[msgId] || {}), draft_busy: true } }));
+    try {
+      const r = await axios.post(`${API}/outlook/draft-llm`, { message_id: msgId });
+      setMailExpanded((m) => ({ ...m, [msgId]: { ...(m[msgId] || {}), draft: r.data.draft, draft_busy: false } }));
+    } catch (e) {
+      setMailExpanded((m) => ({ ...m, [msgId]: { ...(m[msgId] || {}), draft_busy: false } }));
+      showToast(e?.response?.data?.detail || "draft failed", "err");
+    }
+  };
+
+  const sendMailReply = async (msgId) => {
+    const ent = mailExpanded[msgId] || {};
+    const body = ent.draft;
+    if (!body || !body.trim()) { showToast("nothing to send"); return; }
+    if (!window.confirm("Send this reply via your Outlook?")) return;
+    setMailExpanded((m) => ({ ...m, [msgId]: { ...(m[msgId] || {}), sending: true } }));
+    try {
+      const dr = await axios.post(`${API}/outlook/draft`, { message_id: msgId, body });
+      const did = dr.data?.draft_id;
+      await axios.post(`${API}/outlook/send/${did}`);
+      showToast("sent");
+      setMailExpanded((m) => { const c = { ...m }; delete c[msgId]; return c; });
+      loadMail();
+    } catch (e) {
+      showToast(e?.response?.data?.detail || "send failed", "err");
+      setMailExpanded((m) => ({ ...m, [msgId]: { ...(m[msgId] || {}), sending: false } }));
+    }
+  };
+
+  useEffect(() => {
+    if (outlook?.connected) loadMail();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [outlook?.connected]);
 
   const askBrain = async () => {
     const symptom = askInput.trim();
@@ -756,10 +817,22 @@ function BudDashboard({ currentUser, onSignOut }) {
                     className={`text-sm whitespace-pre-wrap break-words ${m.role === "user" ? "text-[var(--bud-text)]" : "text-[var(--bud-amber)] font-mono"}`}
                     data-testid={`chat-msg-${m.role}-${i}`}
                   >
-                    <span className="text-[10px] tracking-[0.25em] text-[var(--bud-muted)] mr-2">
-                      {m.role === "user" ? "YOU" : "BUD"}
-                    </span>
-                    {m.content}
+                    <div className="flex items-start gap-2">
+                      <span className="text-[10px] tracking-[0.25em] text-[var(--bud-muted)] mt-1">
+                        {m.role === "user" ? "YOU" : "BUD"}
+                      </span>
+                      <div className="flex-1">{m.content}</div>
+                      {m.role === "assistant" && (
+                        <button
+                          onClick={() => { navigator.clipboard.writeText(m.content || ""); showToast("copied"); }}
+                          className="bud-btn-ghost px-2 py-1 rounded text-[10px] tracking-[0.2em] flex-shrink-0"
+                          data-testid={`chat-copy-msg-${i}`}
+                          title="copy this reply"
+                        >
+                          copy
+                        </button>
+                      )}
+                    </div>
                   </div>
                 ))
               )}
@@ -926,6 +999,126 @@ function BudDashboard({ currentUser, onSignOut }) {
             ) : (
               <div className="bud-card-inset p-4 text-xs text-[var(--bud-muted)]" data-testid="task-list-empty">
                 queue empty — add a task or wait for inbound to populate.
+              </div>
+            )}
+          </Section>
+
+          <Section
+            title="Mailroom"
+            kicker={outlook?.connected ? `OUTLOOK · ${outlook.email || ""} · ${mailbox.length} RECENT` : "OUTLOOK · DISCONNECTED"}
+            right={
+              <button
+                onClick={loadMail}
+                className="bud-btn-ghost px-3 py-2 rounded text-sm inline-flex items-center gap-2"
+                data-testid="mailroom-refresh-btn"
+                title="reload inbox"
+              >
+                <RefreshCw size={14} /> reload
+              </button>
+            }
+          >
+            {!outlook?.connected ? (
+              <div className="bud-card-inset p-4 text-xs text-[var(--bud-muted)]" data-testid="mailroom-disconnected">
+                outlook is not connected. open the outlook section above and tap connect.
+              </div>
+            ) : mailbox.length === 0 ? (
+              <div className="bud-card-inset p-4 text-xs text-[var(--bud-muted)]" data-testid="mailroom-empty">
+                no recent mail.
+              </div>
+            ) : (
+              <div className="space-y-2 max-h-[560px] overflow-y-auto pr-1" data-testid="mailroom-list">
+                {mailbox.map((m) => {
+                  const ent = mailExpanded[m.id];
+                  const open = !!ent;
+                  return (
+                    <div key={m.id} className="bud-card-inset p-3 text-xs" data-testid={`mail-${m.id}`}>
+                      <button
+                        onClick={() => openMail(m.id)}
+                        className="w-full text-left"
+                        data-testid={`mail-open-${m.id}`}
+                      >
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="text-[var(--bud-text)] truncate flex-1 mr-2">{m.subject}</span>
+                          <span className="text-[10px] text-[var(--bud-muted)] flex-shrink-0">
+                            {m.received_at ? new Date(m.received_at).toLocaleString() : ""}
+                          </span>
+                        </div>
+                        <div className="text-[10px] text-[var(--bud-amber)] mb-1 truncate">
+                          {m.from_name || m.from_email}{m.from_email && m.from_name ? ` · ${m.from_email}` : ""}
+                        </div>
+                        <div className="text-[var(--bud-muted)] line-clamp-2 whitespace-pre-wrap">
+                          {m.preview}
+                        </div>
+                      </button>
+                      {open && (
+                        <div className="mt-3 pt-3 border-t border-[var(--bud-line)]" data-testid={`mail-expanded-${m.id}`}>
+                          {ent.loading ? (
+                            <div className="text-[var(--bud-muted)]">loading…</div>
+                          ) : ent.error ? (
+                            <div className="text-[var(--bud-red)]">{ent.error}</div>
+                          ) : (
+                            <>
+                              {ent.detail && (
+                                <div className="text-[var(--bud-text)] whitespace-pre-wrap break-words mb-3 max-h-[260px] overflow-y-auto"
+                                     data-testid={`mail-body-${m.id}`}>
+                                  {ent.detail.body_text || ent.detail.body_html?.replace(/<[^>]+>/g, "\n") || "(empty body)"}
+                                </div>
+                              )}
+                              {ent.draft !== undefined && (
+                                <>
+                                  <div className="text-[10px] tracking-[0.25em] text-[var(--bud-muted)] mb-1">REPLY DRAFT (editable)</div>
+                                  <textarea
+                                    value={ent.draft}
+                                    onChange={(e) => setMailExpanded((mm) => ({ ...mm, [m.id]: { ...mm[m.id], draft: e.target.value } }))}
+                                    rows={6}
+                                    className="bud-input w-full text-sm text-[var(--bud-amber)] font-mono p-2 rounded resize-y mb-2"
+                                    data-testid={`mail-draft-edit-${m.id}`}
+                                  />
+                                </>
+                              )}
+                              <div className="flex flex-wrap gap-2 mt-2">
+                                <button
+                                  onClick={() => draftMailReply(m.id)}
+                                  disabled={ent.draft_busy}
+                                  className="bud-btn-primary px-3 py-1 rounded text-xs"
+                                  data-testid={`mail-draft-btn-${m.id}`}
+                                >
+                                  {ent.draft_busy ? "drafting…" : ent.draft !== undefined ? "re-draft" : "draft reply"}
+                                </button>
+                                {ent.draft !== undefined && (
+                                  <>
+                                    <button
+                                      onClick={() => { navigator.clipboard.writeText(ent.draft || ""); showToast("draft copied"); }}
+                                      className="bud-btn-ghost px-3 py-1 rounded text-xs"
+                                      data-testid={`mail-copy-btn-${m.id}`}
+                                    >copy</button>
+                                    <button
+                                      onClick={() => sendMailReply(m.id)}
+                                      disabled={ent.sending}
+                                      className="bud-btn-primary px-3 py-1 rounded text-xs"
+                                      data-testid={`mail-send-btn-${m.id}`}
+                                    >
+                                      {ent.sending ? "sending…" : "send via outlook"}
+                                    </button>
+                                  </>
+                                )}
+                                {ent.detail?.web_link && (
+                                  <a
+                                    href={ent.detail.web_link}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="bud-btn-ghost px-3 py-1 rounded text-xs"
+                                    data-testid={`mail-weblink-${m.id}`}
+                                  >open in outlook</a>
+                                )}
+                              </div>
+                            </>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             )}
           </Section>

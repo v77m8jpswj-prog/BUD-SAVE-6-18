@@ -330,6 +330,113 @@ async def create_draft(req: DraftReplyRequest, request: Request):
     return {"draft_id": draft_id}
 
 
+@router.get("/message/{message_id}")
+async def message_detail(message_id: str, request: Request):
+    """Pull full body + headers for one message. Used by the Mailroom panel."""
+    db = request.app.state.db
+    params = {"$select": "id,subject,from,toRecipients,ccRecipients,receivedDateTime,body,bodyPreview,conversationId,hasAttachments,webLink,isRead"}
+    r = await _graph(db, "GET", f"/me/messages/{message_id}", params=params)
+    if r.status_code != 200:
+        raise HTTPException(status_code=r.status_code, detail=f"Graph error: {r.text[:300]}")
+    m = r.json()
+    body = m.get("body") or {}
+    return {
+        "id": m.get("id"),
+        "subject": m.get("subject"),
+        "from_name": ((m.get("from") or {}).get("emailAddress") or {}).get("name"),
+        "from_email": ((m.get("from") or {}).get("emailAddress") or {}).get("address"),
+        "to": [((r.get("emailAddress") or {}).get("address")) for r in (m.get("toRecipients") or [])],
+        "cc": [((r.get("emailAddress") or {}).get("address")) for r in (m.get("ccRecipients") or [])],
+        "received_at": m.get("receivedDateTime"),
+        "body_html": body.get("content") if body.get("contentType", "").lower() == "html" else None,
+        "body_text": body.get("content") if body.get("contentType", "").lower() != "html" else None,
+        "conversation_id": m.get("conversationId"),
+        "has_attachments": m.get("hasAttachments"),
+        "web_link": m.get("webLink"),
+    }
+
+
+class DraftLLMRequest(BaseModel):
+    message_id: str
+    instruction: Optional[str] = None  # optional "make it shorter" / "ask for invoice" hint
+
+
+@router.post("/draft-llm")
+async def draft_with_llm(req: DraftLLMRequest, request: Request):
+    """Generate a Doc-voice reply draft from an inbox message. Returns the
+    draft text. Doc then edits + taps send to actually fire it."""
+    db = request.app.state.db
+    # pull the source message
+    m_resp = await _graph(
+        db, "GET", f"/me/messages/{req.message_id}",
+        params={"$select": "id,subject,from,receivedDateTime,body,bodyPreview"},
+    )
+    if m_resp.status_code != 200:
+        raise HTTPException(status_code=m_resp.status_code, detail=m_resp.text[:200])
+    src = m_resp.json()
+    body_obj = src.get("body") or {}
+    src_text = body_obj.get("content") or src.get("bodyPreview") or ""
+    if body_obj.get("contentType", "").lower() == "html":
+        import re as _re
+        src_text = _re.sub(r"<[^>]+>", "\n", src_text)
+        src_text = _re.sub(r"\n{3,}", "\n\n", src_text).strip()
+
+    # operator overlay
+    overlay = await db["brain_operator_profile"].find_one({"shop_id": "drunderhood-fortsmith"}, {"_id": 0})
+    style = (overlay or {}).get("operator_style", "").strip()
+    facts = (overlay or {}).get("locked_memory_facts", []) or []
+    fact_lines = "\n".join(f"- {str(f)}" for f in facts[:15])
+    from_email = ((src.get("from") or {}).get("emailAddress") or {}).get("address", "")
+
+    system = (
+        "You are Bud, drafting an email reply as Doc Holmes "
+        "(Dr. Underhood Automotive Specialist, Fort Smith AR). "
+        "ABSOLUTE TONE CONTRACT: NO markdown bolding, NO emoji, NO upsell, NO fluff. "
+        "Plain prose. Lead with the answer. ALL CAPS only if it's how Doc would type it. "
+        "Curse if it fits. Never lecture. "
+        "Keep email replies SHORT — 2-4 sentences max unless the inbound clearly needs more. "
+        "HARD RULES: do NOT commit to a customer schedule or quote a price (AutoLEAP/shop board not wired). "
+        "If the inbound is a customer asking when/how much, acknowledge + defer (Doc will confirm). "
+        "If it's a vendor/automation/Twilio/Microsoft/etc, write a direct business reply. "
+        "Sign off: 'Doc' on its own line. No dash. No signature block. No emoji."
+        + (f"\n\nDOC OPERATOR STYLE: {style}" if style else "")
+        + (f"\n\nLOCKED DOC FACTS:\n{fact_lines}" if fact_lines else "")
+    )
+    extra = f"\n\nADDITIONAL DIRECTION FROM DOC: {req.instruction}" if req.instruction else ""
+    user = (
+        f"Draft Doc's reply to this email.\n\n"
+        f"FROM: {from_email}\n"
+        f"SUBJECT: {src.get('subject','')}\n"
+        f"BODY:\n{src_text[:4000]}{extra}"
+    )
+
+    try:
+        from emergentintegrations.llm.chat import LlmChat, UserMessage
+        import os, uuid as _uuid
+        api_key = os.environ.get("EMERGENT_LLM_KEY")
+        if not api_key:
+            raise HTTPException(500, "EMERGENT_LLM_KEY missing")
+        chat = (
+            LlmChat(api_key=api_key, session_id=f"email-draft-{_uuid.uuid4().hex[:8]}", system_message=system)
+            .with_model("openai", "gpt-5.2")
+        )
+        reply = (await chat.send_message(UserMessage(text=user))).strip()
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(502, f"draft generation failed: {e}")
+
+    return {
+        "ok": True,
+        "draft": reply,
+        "in_reply_to": {
+            "message_id": req.message_id,
+            "from_email": from_email,
+            "subject": src.get("subject"),
+        },
+    }
+
+
 @router.post("/send/{draft_id}")
 async def send_draft(draft_id: str, request: Request):
     db = request.app.state.db
