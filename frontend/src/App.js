@@ -2228,11 +2228,12 @@ function AuthGate() {
   useEffect(() => {
     const hash = window.location.hash || "";
     if (hash.includes("session_id=")) {
-      // Returning from Emergent auth callback. Exchange the session_id once.
       if (processedRef.current) return;
       processedRef.current = true;
       const m = hash.match(/session_id=([^&]+)/);
       const sessionId = m ? decodeURIComponent(m[1]) : null;
+      // STRIP THE HASH IMMEDIATELY so a refresh can't replay a stale session_id
+      window.history.replaceState(null, "", window.location.pathname + window.location.search);
       if (!sessionId) {
         setState("gate");
         return;
@@ -2246,13 +2247,16 @@ function AuthGate() {
           );
           setUser(r.data.user);
           setState("authed");
-          // strip the hash so refresh works
-          window.history.replaceState(null, "", window.location.pathname + window.location.search);
         } catch (e) {
-          const detail = e?.response?.data?.detail || "auth failed";
-          setErrorMsg(detail);
+          const detail = e?.response?.data?.detail || "session exchange failed";
+          // If Emergent rejected the session_id (expired/already used), show a
+          // friendly retry instead of a hard error
+          if (String(detail).includes("emergent session lookup")) {
+            setErrorMsg("That sign-in link expired or was already used. Tap Sign in with Google again — fresh link.");
+          } else {
+            setErrorMsg(detail);
+          }
           setState("denied");
-          window.history.replaceState(null, "", window.location.pathname + window.location.search);
         }
       })();
       return;
