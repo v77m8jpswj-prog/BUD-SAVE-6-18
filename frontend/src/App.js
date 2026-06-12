@@ -790,6 +790,86 @@ function BudDashboard({ currentUser, onSignOut }) {
           <VoiceRealtimePanel showToast={showToast} />
 
           <Section
+            title="Chat with Bud"
+            kicker={`TEXT · ${chatMessages.length} TURNS`}
+            right={
+              <button
+                onClick={clearChat}
+                className="bud-btn-ghost px-3 py-2 rounded text-sm inline-flex items-center gap-2"
+                data-testid="chat-clear-btn"
+                title="clear chat history"
+              >
+                <Trash2 size={14} /> clear
+              </button>
+            }
+          >
+            <div
+              className="bud-card-inset p-3 max-h-[420px] min-h-[180px] overflow-y-auto space-y-3 mb-3"
+              data-testid="chat-history"
+            >
+              {chatMessages.length === 0 ? (
+                <div className="text-xs text-[var(--bud-muted)]" data-testid="chat-empty">
+                  silent channel. type below — same Doc voice as the voice panel.
+                </div>
+              ) : (
+                chatMessages.map((m, i) => (
+                  <div
+                    key={i}
+                    className={`text-sm whitespace-pre-wrap break-words ${m.role === "user" ? "text-[var(--bud-text)]" : "text-[var(--bud-amber)] font-mono"}`}
+                    data-testid={`chat-msg-${m.role}-${i}`}
+                  >
+                    <div className="flex items-start gap-2">
+                      <span className="text-[10px] tracking-[0.25em] text-[var(--bud-muted)] mt-1">
+                        {m.role === "user" ? "YOU" : "BUD"}
+                      </span>
+                      <div className="flex-1">{m.content}</div>
+                      {m.role === "assistant" && (
+                        <button
+                          onClick={() => { navigator.clipboard.writeText(m.content || ""); showToast("copied"); }}
+                          className="bud-btn-ghost px-2 py-1 rounded text-[10px] tracking-[0.2em] flex-shrink-0"
+                          data-testid={`chat-copy-msg-${i}`}
+                          title="copy this reply"
+                        >
+                          copy
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ))
+              )}
+              {chatBusy && (
+                <div className="text-xs text-[var(--bud-muted)] italic" data-testid="chat-thinking">
+                  bud is typing…
+                </div>
+              )}
+            </div>
+            <div className="flex gap-2">
+              <textarea
+                value={chatInput}
+                onChange={(e) => setChatInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    sendChat();
+                  }
+                }}
+                placeholder="ask bud anything — enter to send, shift+enter for newline"
+                rows={2}
+                className="bud-input flex-1 px-3 py-2 text-sm rounded resize-none"
+                data-testid="chat-input"
+              />
+              <button
+                onClick={sendChat}
+                disabled={chatBusy || !chatInput.trim()}
+                className="bud-btn-primary px-4 py-2 rounded text-sm"
+                data-testid="chat-send-btn"
+              >
+                {chatBusy ? "…" : "send"}
+              </button>
+            </div>
+          </Section>
+
+          <Section
             title="Shop Brain"
             kicker={
               brain?.connected
