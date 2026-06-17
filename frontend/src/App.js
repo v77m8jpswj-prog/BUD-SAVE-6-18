@@ -1536,8 +1536,7 @@ function BudDashboard({ currentUser, onSignOut }) {
               <div className="space-y-3 max-h-[520px] overflow-auto pr-1">
                 {assets.map((a) => {
                   const lines = (a.content || "").split("\n").length;
-                  const preview = (a.content || "").slice(0, 280);
-                  const truncated = (a.content || "").length > 280;
+                  const full = a.content || "";
                   return (
                     <div
                       key={a.id}
@@ -1574,10 +1573,10 @@ function BudDashboard({ currentUser, onSignOut }) {
                       </div>
 
                       <pre
-                        className="text-xs text-[var(--bud-text)] whitespace-pre-wrap break-words leading-relaxed bg-[#0a0a0b] border border-[var(--bud-line)] rounded p-3 max-h-40 overflow-auto"
+                        className="text-xs text-[var(--bud-text)] whitespace-pre-wrap break-words leading-relaxed bg-[#0a0a0b] border border-[var(--bud-line)] rounded p-3 max-h-[480px] overflow-auto"
                         data-testid={`asset-content-${a.id}`}
                       >
-{preview}{truncated ? "…" : ""}
+{full}
                       </pre>
 
                       <div className="flex items-center justify-between gap-2 mt-3">
