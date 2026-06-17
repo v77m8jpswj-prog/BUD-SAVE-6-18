@@ -137,30 +137,29 @@ async def _collect_inbox_summary(db, hours: int = 24) -> list[dict]:
 
 
 async def _collect_brain_snapshot(db) -> dict:
-    """Pull a tight live snapshot from 9's brain for the briefing."""
+    """Quick brain health + what's in the shop right now.
+    Uses 9's locked-down peer API only — ping (no auth) + whoami (auth) + open-work."""
     import brain_client as _bc
-    out: dict = {"connected": False}
+    out: dict = {"connected": False, "token_valid": False}
     try:
-        s = await _bc.stats()
-        out.update({
-            "connected": True,
-            "total_cases": s.get("total_cases"),
-            "total_vehicles_seen": s.get("total_vehicles_seen"),
-            "technicians_contributing": s.get("technicians_contributing"),
-            "last_ingest_at": s.get("last_ingest_at"),
-            "top_makes": s.get("top_makes", [])[:4],
-        })
+        await _bc.ping()
+        out["connected"] = True
     except Exception as e:
-        out["error"] = str(e)
+        out["error"] = f"ping failed: {e}"
+        return out
     try:
-        out["recent_outcomes"] = await _bc.recent_outcomes(limit=5)
-    except Exception:
-        out["recent_outcomes"] = []
+        w = await _bc.whoami()
+        out["token_valid"] = bool(w.get("ok"))
+        out["peer"] = w.get("peer")
+        out["shop_id"] = w.get("shop_id")
+    except Exception as e:
+        out["token_error"] = str(e)
     try:
-        page = await _bc.cases(limit=5)
-        out["recent_cases"] = page.get("cases", []) if isinstance(page, dict) else []
-    except Exception:
-        out["recent_cases"] = []
+        ow = await _bc.open_work()
+        out["open_count"] = ow.get("open_count", 0)
+        out["open_leads"] = (ow.get("open_leads") or [])[:5]
+    except Exception as e:
+        out["open_work_error"] = str(e)
     return out
 
 
@@ -211,25 +210,14 @@ def _format_data_for_llm(inbox: list[dict], letters: list[dict], brain: dict) ->
     if not brain.get("connected"):
         lines.append(f"[brain offline: {brain.get('error','unknown')}]")
     else:
-        lines.append(
-            f"cases={brain.get('total_cases')} · vehicles={brain.get('total_vehicles_seen')} "
-            f"· techs={brain.get('technicians_contributing')} · last_ingest={brain.get('last_ingest_at')}"
-        )
-        rc = brain.get("recent_cases") or []
-        if rc:
-            lines.append(f"recent_cases ({len(rc)}):")
-            for c in rc:
-                v = c.get("vehicle") or {}
-                veh = f"{v.get('year','')} {v.get('make','')} {v.get('model','')}".strip()
-                lines.append(
-                    f"  - {veh or '?'} — {(c.get('symptom') or '')[:80]} "
-                    f"[{c.get('outcome','?')}, tech={c.get('technician_name','?')}]"
-                )
-        ro = brain.get("recent_outcomes") or []
-        if ro:
-            lines.append(f"recent_outcomes ({len(ro)}):")
-            for o in ro[:5]:
-                lines.append(f"  - {str(o)[:200]}")
+        token_state = "valid" if brain.get("token_valid") else "INVALID — re-issue"
+        lines.append(f"ping=OK · token={token_state} · peer={brain.get('peer','?')}")
+        if brain.get("open_count") is not None:
+            lines.append(f"open work in shop: {brain['open_count']}")
+        for lead in brain.get("open_leads", [])[:5]:
+            lines.append(f"  - {lead.get('name','?')} · {lead.get('vehicle','?')} · {lead.get('what_they_need','')[:60]}")
+        if brain.get("open_work_error"):
+            lines.append(f"[open-work error: {brain['open_work_error']}]")
     lines.append("")
     lines.append("## SHOP BOARD (AutoLEAP)")
     lines.append("[AutoLEAP API access pending]")

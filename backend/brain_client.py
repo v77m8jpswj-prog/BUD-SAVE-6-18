@@ -28,6 +28,27 @@ def _h(token: str) -> dict:
     return {"Authorization": f"Bearer {token}"}
 
 
+async def ping() -> dict:
+    """Public health probe (no token). Returns brain reachability."""
+    base, _ = _cfg()
+    async with httpx.AsyncClient(timeout=10.0) as c:
+        r = await c.get(f"{base}/api/brain/peer/ping")
+    r.raise_for_status()
+    try:
+        return r.json()
+    except Exception:
+        return {"ok": True, "status_code": r.status_code}
+
+
+async def whoami() -> dict:
+    """Validates the bearer token. 200 = good, 401 = ask Doc for a new token."""
+    base, token = _cfg()
+    async with httpx.AsyncClient(timeout=10.0) as c:
+        r = await c.get(f"{base}/api/brain/peer/whoami", headers=_h(token))
+    r.raise_for_status()
+    return r.json()
+
+
 async def lookup(q: str) -> dict:
     """Search customers/vehicles. Returns recent leads + closed repair cases."""
     base, token = _cfg()
