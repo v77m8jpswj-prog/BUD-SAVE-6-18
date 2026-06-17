@@ -873,8 +873,8 @@ function BudDashboard({ currentUser, onSignOut }) {
             title="Shop Brain"
             kicker={
               brain?.connected
-                ? `9 / WRENCH · ${brain.live?.shop_name || "—"} · ${brain.live?.total_cases ?? 0} CASES`
-                : `9 / WRENCH · ${brain?.error ? "OFFLINE" : "CONNECTING…"}`
+                ? `9 / WRENCH · PIPE ${brain.pipe_ok ? "OK" : "DOWN"} · TOKEN ${brain.token_ok ? "OK" : "BAD"} · ${brain.open_count ?? 0} OPEN`
+                : `9 / WRENCH · ${brain ? "OFFLINE" : "CONNECTING…"}`
             }
             right={
               <button
@@ -882,7 +882,7 @@ function BudDashboard({ currentUser, onSignOut }) {
                 disabled={brainBusy}
                 className="bud-btn-ghost px-3 py-2 rounded text-sm inline-flex items-center gap-2"
                 data-testid="brain-sync-btn"
-                title="Pull fresh stats + cases from 9 into local mirror"
+                title="Pull fresh open-work from 9"
               >
                 <RefreshCw size={14} className={brainBusy ? "animate-spin" : ""} /> sync
               </button>
@@ -895,36 +895,50 @@ function BudDashboard({ currentUser, onSignOut }) {
             ) : !brain.connected ? (
               <div className="bud-card-inset p-4 text-xs" data-testid="brain-offline">
                 <div className="text-[var(--bud-text)] mb-1 font-semibold">Brain offline.</div>
-                <div className="text-[var(--bud-muted)]">{brain.error || "no response from 9"}</div>
+                <div className="text-[var(--bud-muted)]">
+                  {brain.errors?.open_work || brain.errors?.whoami || brain.errors?.ping || "no response from 9"}
+                </div>
               </div>
             ) : (
-              <div className="grid grid-cols-2 gap-3 text-xs" data-testid="brain-stats">
-                <div className="bud-card-inset p-3">
-                  <div className="text-[10px] tracking-[0.25em] text-[var(--bud-muted)]">CASES</div>
-                  <div className="bud-display text-2xl text-[var(--bud-amber)]" data-testid="brain-cases">
-                    {brain.live?.total_cases ?? "—"}
+              <div className="space-y-3" data-testid="brain-stats">
+                <div className="grid grid-cols-3 gap-2 text-xs">
+                  <div className="bud-card-inset p-3">
+                    <div className="text-[10px] tracking-[0.25em] text-[var(--bud-muted)]">PIPE</div>
+                    <div className={`bud-display text-xl ${brain.pipe_ok ? "text-[var(--bud-amber)]" : "text-red-400"}`} data-testid="brain-pipe">
+                      {brain.pipe_ok ? "LIVE" : "DOWN"}
+                    </div>
                   </div>
-                  <div className="text-[10px] text-[var(--bud-muted)] mt-1">
-                    mirrored: {brain.mirror_cases_count}
+                  <div className="bud-card-inset p-3">
+                    <div className="text-[10px] tracking-[0.25em] text-[var(--bud-muted)]">TOKEN</div>
+                    <div className={`bud-display text-xl ${brain.token_ok ? "text-[var(--bud-amber)]" : "text-red-400"}`} data-testid="brain-token">
+                      {brain.token_ok ? "OK" : "BAD"}
+                    </div>
+                  </div>
+                  <div className="bud-card-inset p-3">
+                    <div className="text-[10px] tracking-[0.25em] text-[var(--bud-muted)]">OPEN WORK</div>
+                    <div className="bud-display text-xl text-[var(--bud-text)]" data-testid="brain-open-count">
+                      {brain.open_count ?? 0}
+                    </div>
                   </div>
                 </div>
-                <div className="bud-card-inset p-3">
-                  <div className="text-[10px] tracking-[0.25em] text-[var(--bud-muted)]">VEHICLES</div>
-                  <div className="bud-display text-2xl text-[var(--bud-text)]">
-                    {brain.live?.total_vehicles_seen ?? "—"}
+
+                {brain.open_leads_preview?.length > 0 && (
+                  <div className="bud-card-inset p-3" data-testid="brain-leads">
+                    <div className="text-[10px] tracking-[0.25em] text-[var(--bud-muted)] mb-2">RECENT LEADS</div>
+                    <div className="space-y-1.5 text-xs">
+                      {brain.open_leads_preview.map((lead) => (
+                        <div key={lead.id} className="flex justify-between gap-2 border-b border-[var(--bud-border)] pb-1 last:border-0">
+                          <div className="text-[var(--bud-text)] font-semibold truncate flex-1">{lead.name}</div>
+                          <div className="text-[var(--bud-muted)] truncate flex-1">{lead.vehicle}</div>
+                          <div className="text-[var(--bud-muted)] truncate text-[10px]">{lead.contact}</div>
+                        </div>
+                      ))}
+                    </div>
                   </div>
-                  <div className="text-[10px] text-[var(--bud-muted)] mt-1">
-                    techs: {brain.live?.technicians_contributing ?? "—"}
-                  </div>
-                </div>
-                <div className="bud-card-inset p-3 col-span-2">
-                  <div className="text-[10px] tracking-[0.25em] text-[var(--bud-muted)] mb-1">TOP MAKES</div>
-                  <div className="text-[var(--bud-text)]">
-                    {(brain.live?.top_makes || []).join(" · ") || "—"}
-                  </div>
-                  <div className="text-[10px] text-[var(--bud-muted)] mt-2">
-                    last ingest: {brain.live?.last_ingest_at ? new Date(brain.live.last_ingest_at).toLocaleString() : "—"}
-                  </div>
+                )}
+
+                <div className="text-[10px] text-[var(--bud-muted)]">
+                  mirrored cases: {brain.mirror_cases_count ?? 0} · last check: {brain.checked_at ? new Date(brain.checked_at).toLocaleTimeString() : "—"}
                 </div>
               </div>
             )}

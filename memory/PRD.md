@@ -33,6 +33,13 @@ Robert "Doc" Holmes — auto shop owner, solo founder, voice-to-text on iPhone, 
 - [x] AutoLEAP API access request sent to support@autoleap.com (waiting on reply)
 - [x] Emergent platform complaint sent to support@emergent.sh re: upsell injection
 
+## 2026-06-17 — Brain Pipeline Rewire
+- [x] `/api/brain/status` rebuilt: returns `pipe_ok` (ping), `token_ok` (whoami), `open_count`, `open_leads_preview`, `mirror_cases_count`, `errors` per check.
+- [x] Added `/api/brain/peer/ping` + `/api/brain/peer/whoami` Bud-side proxies (round out the locked-down peer suite).
+- [x] `/api/brain/ask` rebuilt on top of 9's `peer.lookup` (progressive query fallback: make+model → model → make → symptom token). Lexical token-overlap scoring. Verified end-to-end: 100% match on a known F-150 P0316 symptom.
+- [x] `/api/brain/draft-estimate` rebuilt: gpt-5.2 via emergent llm key, Doc-voice tone contract (no price, no commitment to time, suggest "call the shop"), saved to `bud_assets`. Verified: clean 256-char SMS draft.
+- [x] Shop Brain dashboard panel rewritten to surface real locked-down API data: PIPE/TOKEN/OPEN WORK tiles + RECENT LEADS list + mirror count. No more dashes-everywhere when brain is actually live.
+
 ## Live state
 - **Bud base URL:** https://bud-control.preview.emergentagent.com
 - **Outlook:** connected as doc@drunderhood.com
