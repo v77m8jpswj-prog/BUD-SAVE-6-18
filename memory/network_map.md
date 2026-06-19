@@ -28,7 +28,7 @@ Three-agent pipe. Doc is the foreman. Agents coordinate so he doesn't relay.
 
 ## Tokens
 
-- **OG's inbound token (Bud uses this to send TO OG):** `a9CEXS9Pmi8pK_sRdhv_WJbZ2idKkkST4bNTdN0VwkQ`
+- **OG's inbound token (Bud uses this to send TO OG):** `[REDACTED:a9CEXS...]`
   - On OG's side this is loaded as `AGENT_MAIL_BUD_TOKEN`
 - **Bud's inbound token (Bud generates, OG and 9 use to send TO Bud):** generated on first boot, stored in DB `config.bud_inbound_token`. Doc must paste this into OG's `/api/agent-mail/configure` so OG can reach back.
 - **9's inbound token (Bud uses to send TO 9):** NOT YET KNOWN. OG will shuttle after handshake.

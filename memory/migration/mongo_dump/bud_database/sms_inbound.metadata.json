@@ -1,0 +1,1 @@
+{"indexes":[{"v":{"$numberInt":"2"},"key":{"_id":{"$numberInt":"1"}},"name":"_id_"},{"v":{"$numberInt":"2"},"key":{"received_at":{"$numberInt":"-1"}},"name":"received_at_-1"},{"v":{"$numberInt":"2"},"key":{"message_sid":{"$numberInt":"1"}},"name":"message_sid_1","sparse":true}],"uuid":"c42d0de2cee54461b5f4fb46239814ef","collectionName":"sms_inbound","type":"collection"}

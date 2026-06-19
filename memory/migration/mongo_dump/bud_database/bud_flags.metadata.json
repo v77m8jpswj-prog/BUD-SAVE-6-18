@@ -1,0 +1,1 @@
+{"indexes":[{"v":{"$numberInt":"2"},"key":{"_id":{"$numberInt":"1"}},"name":"_id_"}],"uuid":"d8013ee7e0b14d9fb9e43aa9a04e6789","collectionName":"bud_flags","type":"collection"}

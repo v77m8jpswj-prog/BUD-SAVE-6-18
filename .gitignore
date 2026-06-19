@@ -86,3 +86,6 @@ android-sdk/
 credentials.json
 *.key
 .credentials
+
+# Migration secrets snapshot — never push
+memory/migration/secrets_snapshot.txt
